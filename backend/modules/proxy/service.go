@@ -1046,7 +1046,7 @@ func (s *Service) releasePort53() {
 		}
 		// 删除符号链接并创建新文件，指向 Mihomo 的 DNS
 		os.Remove("/etc/resolv.conf")
-		os.WriteFile("/etc/resolv.conf", []byte("nameserver 127.0.0.1\n"), 0644)
+		os.WriteFile("/etc/resolv.conf", []byte("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 114.114.114.114\noptions timeout:2 attempts:2 rotate single-request-reopen\n"), 0644)
 		s.addLog("已停止 systemd-resolved 并配置 DNS 指向 Mihomo")
 	}
 
