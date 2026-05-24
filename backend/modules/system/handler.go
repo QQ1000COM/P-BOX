@@ -41,6 +41,9 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/browsers/firefox/clear", h.ClearFirefox)
 	// 出口 IP 信息
 	r.GET("/geoip", h.GetGeoIP)
+	r.GET("/connectivity", h.TestConnectivity)
+	r.GET("/diagnostics", h.GetDiagnostics)
+	r.GET("/chatgpt-check", h.CheckChatGPT)
 }
 
 // GetResources 获取系统资源信息

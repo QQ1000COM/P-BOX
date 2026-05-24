@@ -130,10 +130,24 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 
 	// 同步到 proxy 服务
 	if h.proxyService != nil {
-		h.proxyService.PatchConfig(map[string]interface{}{
+		if err := h.proxyService.PatchConfig(map[string]interface{}{
+			"mixedPort":      float64(settings.MixedPort),
+			"socksPort":      float64(settings.SocksPort),
+			"redirPort":      float64(settings.RedirPort),
+			"tproxyPort":     float64(settings.TProxyPort),
+			"allowLan":       settings.AllowLan,
+			"ipv6":           settings.IPv6,
+			"mode":           settings.Mode,
+			"logLevel":       settings.LogLevel,
 			"autoStart":      settings.AutoStart,
 			"autoStartDelay": float64(settings.AutoStartDelay),
-		})
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    1,
+				"message": "Failed to sync runtime settings: " + err.Error(),
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -155,6 +169,28 @@ func (h *SettingsHandler) ResetSettings(c *gin.Context) {
 			"message": "Failed to save settings: " + err.Error(),
 		})
 		return
+	}
+
+	if h.proxyService != nil {
+		defaults := h.settings
+		if err := h.proxyService.PatchConfig(map[string]interface{}{
+			"mixedPort":      float64(defaults.MixedPort),
+			"socksPort":      float64(defaults.SocksPort),
+			"redirPort":      float64(defaults.RedirPort),
+			"tproxyPort":     float64(defaults.TProxyPort),
+			"allowLan":       defaults.AllowLan,
+			"ipv6":           defaults.IPv6,
+			"mode":           defaults.Mode,
+			"logLevel":       defaults.LogLevel,
+			"autoStart":      defaults.AutoStart,
+			"autoStartDelay": float64(defaults.AutoStartDelay),
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    1,
+				"message": "Failed to sync runtime settings: " + err.Error(),
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
