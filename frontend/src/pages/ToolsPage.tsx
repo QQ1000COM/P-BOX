@@ -17,8 +17,10 @@ import {
   XCircle,
 } from 'lucide-react'
 import { api } from '@/api/client'
+import { coreApi, CoreHealth } from '@/api/core'
 import { mihomoApi } from '@/api/mihomo'
 import { proxyApi } from '@/api/proxy'
+import { systemApi, RuleTemplate, SecurityAuditItem, SnapshotInfo } from '@/api/system'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -40,6 +42,13 @@ type DiagnosticItem = {
 type DiagnosticResult = {
   status: 'ok' | 'warn' | 'error'
   items: DiagnosticItem[]
+}
+
+type ConnectionAnalysis = {
+  total: number
+  uploadTotal: number
+  downloadTotal: number
+  topHosts: Array<{ host: string; count: number }>
 }
 
 type TransformMode = 'base64-decode' | 'base64-encode' | 'url-decode' | 'url-encode'
@@ -128,6 +137,12 @@ export default function ToolsPage() {
   const [timestampInput, setTimestampInput] = useState(() => String(Math.floor(Date.now() / 1000)))
   const [configInput, setConfigInput] = useState('')
   const [configOutput, setConfigOutput] = useState('')
+  const [coreHealth, setCoreHealth] = useState<Record<string, CoreHealth> | null>(null)
+  const [githubMirror, setGithubMirror] = useState('')
+  const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([])
+  const [securityAudit, setSecurityAudit] = useState<SecurityAuditItem[]>([])
+  const [ruleTemplates, setRuleTemplates] = useState<RuleTemplate[]>([])
+  const [connectionAnalysis, setConnectionAnalysis] = useState<ConnectionAnalysis | null>(null)
 
   const proxyCommands = useMemo(() => {
     const httpProxy = `http://${PROXY_HOST}:${MIXED_PORT}`
@@ -144,6 +159,15 @@ export default function ToolsPage() {
     () => summarizeSubscription(subscriptionInput),
     [subscriptionInput]
   )
+
+  const subscriptionQuality = useMemo(() => {
+    const total = subscriptionSummary.lines.length
+    const supported = subscriptionSummary.lines.filter((line) => /^(ss|ssr|vmess|vless|trojan|hysteria|hysteria2|tuic|naive|socks|http):\/\//i.test(line)).length
+    const named = subscriptionSummary.names.filter((name) => name && name.length < 80).length
+    const duplicates = total - new Set(subscriptionSummary.lines).size
+    const score = total === 0 ? 0 : Math.max(0, Math.min(100, Math.round((supported / total) * 65 + (named / total) * 25 - duplicates * 2 + 10)))
+    return { score, supported, duplicates }
+  }, [subscriptionSummary])
 
   const timestampResult = useMemo(() => {
     const value = timestampInput.trim()
@@ -287,6 +311,140 @@ export default function ToolsPage() {
     }
   }
 
+  const handleCoreHealth = async () => {
+    try {
+      setLoading('core-health')
+      const result = await coreApi.getHealth()
+      setCoreHealth(result)
+      const sources = await coreApi.getSources()
+      setGithubMirror(sources.githubMirror || '')
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '核心健康检查失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleRepairAllCores = async () => {
+    try {
+      setLoading('repair-all')
+      await coreApi.repairCore('mihomo')
+      await coreApi.repairCore('singbox')
+      setCoreHealth(await coreApi.getHealth())
+      alert('核心修复完成')
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '核心修复失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleSaveSources = async () => {
+    try {
+      setLoading('sources')
+      await coreApi.saveSources({ githubMirror })
+      alert('更新源已保存')
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '保存更新源失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleBackup = async () => {
+    try {
+      setLoading('backup')
+      const token = localStorage.getItem('p-box-token')
+      const response = await fetch('/api/system/backup', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+      if (!response.ok) throw new Error('备份下载失败')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `p-box-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '备份失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleCreateSnapshot = async () => {
+    try {
+      setLoading('snapshot')
+      await systemApi.createSnapshot('工具箱快照')
+      setSnapshots(await systemApi.listHistory())
+      alert('快照已创建')
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '创建快照失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleLoadHistory = async () => {
+    try {
+      setLoading('history')
+      setSnapshots(await systemApi.listHistory())
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '加载历史失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleSecurityAudit = async () => {
+    try {
+      setLoading('security')
+      setSecurityAudit(await systemApi.securityAudit())
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '安全检查失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleRuleTemplates = async () => {
+    try {
+      setLoading('templates')
+      setRuleTemplates(await systemApi.ruleTemplates())
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '加载规则模板失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleConnectionAnalysis = async () => {
+    try {
+      setLoading('connections-analysis')
+      const data = await mihomoApi.getConnections()
+      const hostCounts = new Map<string, number>()
+      for (const item of data.connections as Array<{ metadata?: { host?: string; destinationIP?: string } }>) {
+        const host = item.metadata?.host || item.metadata?.destinationIP || '未知目标'
+        hostCounts.set(host, (hostCounts.get(host) || 0) + 1)
+      }
+      const topHosts = Array.from(hostCounts.entries())
+        .map(([host, count]) => ({ host, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8)
+      setConnectionAnalysis({
+        total: data.connections.length,
+        uploadTotal: data.uploadTotal,
+        downloadTotal: data.downloadTotal,
+        topHosts,
+      })
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '连接分析失败，请确认 Mihomo 正在运行')
+    } finally {
+      setLoading(null)
+    }
+  }
+
   const copyText = async (text: string) => {
     await navigator.clipboard.writeText(text)
     alert('已复制')
@@ -333,6 +491,14 @@ export default function ToolsPage() {
     { id: 'export', icon: Download, label: '导出报告', description: '下载诊断和连通性测试结果', color: 'blue', onClick: handleExportDiagnostics },
     { id: 'repair', icon: Wrench, label: '修复代理核心', description: '重启代理核心并重新运行诊断', color: 'red', onClick: handleRepairCore },
     { id: 'chatgpt', icon: Globe, label: 'ChatGPT 检测', description: '通过代理测试 ChatGPT 和 OpenAI 域名', color: 'cyan', onClick: handleChatGPTCheck },
+    { id: 'core-health', icon: Activity, label: '核心健康检查', description: '检查 Mihomo 和 Sing-box 版本、路径和权限', color: 'violet', onClick: handleCoreHealth },
+    { id: 'repair-all', icon: Wrench, label: '一键修复核心', description: '重新下载并修复两个内置核心', color: 'red', onClick: handleRepairAllCores },
+    { id: 'backup', icon: Download, label: '导出备份', description: '导出配置、订阅、规则和状态文件', color: 'green', onClick: handleBackup },
+    { id: 'snapshot', icon: Clock3, label: '创建配置快照', description: '保存当前配置历史，便于回滚', color: 'orange', onClick: handleCreateSnapshot },
+    { id: 'history', icon: FileJson, label: '查看配置历史', description: '加载已保存的配置快照列表', color: 'blue', onClick: handleLoadHistory },
+    { id: 'security', icon: KeyRound, label: '安全模式检查', description: '检查认证、核心目录和更新源安全项', color: 'pink', onClick: handleSecurityAudit },
+    { id: 'templates', icon: FileJson, label: '规则模板', description: '查看内置 AI、流媒体、广告拦截等模板', color: 'cyan', onClick: handleRuleTemplates },
+    { id: 'connections-analysis', icon: Activity, label: '连接分析', description: '统计当前连接数量和热门目标域名', color: 'green', onClick: handleConnectionAnalysis },
   ]
 
   const getColorClasses = (color: string) => {
@@ -486,6 +652,139 @@ export default function ToolsPage() {
 
         {connectivity && renderConnectivityResults(connectivity)}
         {chatgptCheck && renderConnectivityResults(chatgptCheck)}
+
+        {(coreHealth || snapshots.length > 0 || securityAudit.length > 0 || ruleTemplates.length > 0 || connectionAnalysis) && (
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            {coreHealth && (
+              <section className={panelClass}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className={labelClass}>核心健康</h3>
+                  <button className="control-btn text-xs" onClick={handleSaveSources} disabled={loading !== null}>
+                    保存更新源
+                  </button>
+                </div>
+                <input
+                  className="form-input mb-3"
+                  value={githubMirror}
+                  onChange={(e) => setGithubMirror(e.target.value)}
+                  placeholder="GitHub 镜像，例如 https://ghfast.top/"
+                />
+                <div className="space-y-2">
+                  {Object.values(coreHealth).map((core) => (
+                    <div key={core.coreType} className={cn('rounded-lg border p-3', themeStyle === 'apple-glass' ? 'border-slate-200 bg-white/50' : 'border-white/10 bg-white/5')}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className={labelClass}>{core.name}</div>
+                          <div className={cn('break-all text-xs', themeStyle === 'apple-glass' ? 'text-slate-500' : 'text-slate-400')}>{core.path}</div>
+                        </div>
+                        <span className={cn('rounded-full px-2 py-1 text-xs', core.healthy ? 'bg-emerald-500/20 text-emerald-500' : 'bg-amber-500/20 text-amber-500')}>
+                          {core.healthy ? '正常' : '需处理'}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs">
+                        已安装: {core.installed ? `v${core.version}` : '否'} / 最新: {core.latestVersion || '未知'}
+                      </div>
+                      {core.issues.length > 0 && (
+                        <div className="mt-2 space-y-1 text-xs text-amber-500">
+                          {core.issues.map((issue) => <div key={issue}>- {issue}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {snapshots.length > 0 && (
+              <section className={panelClass}>
+                <h3 className={cn(labelClass, 'mb-3')}>配置历史</h3>
+                <div className="space-y-2">
+                  {snapshots.slice(0, 6).map((snapshot) => (
+                    <div key={snapshot.id} className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <div>{snapshot.label}</div>
+                        <div className={mutedClass}>{new Date(snapshot.createdAt).toLocaleString()} · {snapshot.files} 个文件</div>
+                      </div>
+                      <button
+                        className="control-btn text-xs"
+                        onClick={async () => {
+                          await systemApi.restoreSnapshot(snapshot.id)
+                          alert('快照已恢复')
+                        }}
+                      >
+                        恢复
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {securityAudit.length > 0 && (
+              <section className={panelClass}>
+                <h3 className={cn(labelClass, 'mb-3')}>安全检查</h3>
+                <div className="space-y-2">
+                  {securityAudit.map((item) => (
+                    <div key={item.name} className="flex items-start gap-2 text-sm">
+                      {item.status === 'ok' ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <XCircle className="mt-0.5 h-4 w-4 text-amber-500" />}
+                      <div>
+                        <div>{item.name}</div>
+                        <div className={mutedClass}>{item.detail}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ruleTemplates.length > 0 && (
+              <section className={panelClass}>
+                <h3 className={cn(labelClass, 'mb-3')}>规则模板</h3>
+                <div className="space-y-3">
+                  {ruleTemplates.map((template) => (
+                    <div key={template.name}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className={labelClass}>{template.name}</div>
+                        <button className="control-btn text-xs" onClick={() => copyText(template.rules.join('\n'))}>复制</button>
+                      </div>
+                      <div className={cn('mt-1 rounded-lg p-2 font-mono text-xs', themeStyle === 'apple-glass' ? 'bg-slate-100 text-slate-600' : 'bg-black/30 text-slate-300')}>
+                        {template.rules.slice(0, 3).join(' / ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {connectionAnalysis && (
+              <section className={panelClass}>
+                <h3 className={cn(labelClass, 'mb-3')}>连接分析</h3>
+                <div className="mb-3 grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <div className={mutedClass}>连接数</div>
+                    <div className="font-mono text-lg">{connectionAnalysis.total}</div>
+                  </div>
+                  <div>
+                    <div className={mutedClass}>上传</div>
+                    <div className="font-mono text-lg">{Math.round(connectionAnalysis.uploadTotal / 1024 / 1024)} MB</div>
+                  </div>
+                  <div>
+                    <div className={mutedClass}>下载</div>
+                    <div className="font-mono text-lg">{Math.round(connectionAnalysis.downloadTotal / 1024 / 1024)} MB</div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {connectionAnalysis.topHosts.map((item) => (
+                    <div key={item.host} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate">{item.host}</span>
+                      <span className={mutedClass}>{item.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="glass-card p-6">
@@ -587,7 +886,17 @@ export default function ToolsPage() {
                   <div className="text-lg font-semibold">{count}</div>
                 </div>
               ))}
+              <div className={panelClass}>
+                <div className={mutedClass}>质量分</div>
+                <div className="text-lg font-semibold">{subscriptionQuality.score}</div>
+              </div>
             </div>
+            {subscriptionSummary.lines.length > 0 && (
+              <div className={cn('mt-3 text-xs', themeStyle === 'apple-glass' ? 'text-slate-500' : 'text-slate-400')}>
+                支持协议 {subscriptionQuality.supported}/{subscriptionSummary.lines.length}
+                {subscriptionQuality.duplicates > 0 ? ` · 重复 ${subscriptionQuality.duplicates}` : ''}
+              </div>
+            )}
             {subscriptionSummary.names.length > 0 && (
               <div className="mt-3 space-y-1">
                 {subscriptionSummary.names.map((name, index) => (

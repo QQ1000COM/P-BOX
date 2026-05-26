@@ -29,8 +29,12 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/versions", h.GetVersions)
 	r.POST("/versions/refresh", h.RefreshVersions)
 	r.GET("/platform", h.GetPlatformInfo)
+	r.GET("/health", h.GetHealth)
+	r.GET("/sources", h.GetSources)
+	r.PUT("/sources", h.SaveSources)
 	r.POST("/switch", h.SwitchCore)
 	r.POST("/download/:core", h.DownloadCore)
+	r.POST("/repair/:core", h.RepairCore)
 	r.GET("/download/:core/progress", h.GetDownloadProgress)
 }
 
@@ -106,6 +110,50 @@ func (h *Handler) GetDownloadProgress(c *gin.Context) {
 		"message": "success",
 		"data":    progress,
 	})
+}
+
+func (h *Handler) GetHealth(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    h.service.GetHealth(),
+	})
+}
+
+func (h *Handler) RepairCore(c *gin.Context) {
+	coreType := c.Param("core")
+	if err := h.service.RepairCore(coreType); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    1,
+			"message": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "repair completed",
+	})
+}
+
+func (h *Handler) GetSources(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    h.service.GetUpdateSources(),
+	})
+}
+
+func (h *Handler) SaveSources(c *gin.Context) {
+	var req UpdateSources
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "message": err.Error()})
+		return
+	}
+	if err := h.service.SaveUpdateSources(req); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 1, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
 // RefreshVersions 手动刷新版本信息

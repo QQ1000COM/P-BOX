@@ -61,6 +61,22 @@ type GitHubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+type UpdateSources struct {
+	GitHubMirror string `json:"githubMirror"`
+}
+
+type CoreHealth struct {
+	CoreType      string   `json:"coreType"`
+	Name          string   `json:"name"`
+	Path          string   `json:"path"`
+	Installed     bool     `json:"installed"`
+	Version       string   `json:"version"`
+	LatestVersion string   `json:"latestVersion"`
+	Executable    bool     `json:"executable"`
+	Healthy       bool     `json:"healthy"`
+	Issues        []string `json:"issues"`
+}
+
 type Service struct {
 	dataDir          string
 	currentCore      CoreType
@@ -76,6 +92,30 @@ type SavedCoreStatus struct {
 	Versions       map[string]string `json:"versions"`
 	LatestVersions map[string]string `json:"latestVersions"`
 	LastChecked    time.Time         `json:"lastChecked"`
+}
+
+func (s *Service) sourcesPath() string {
+	return filepath.Join(s.dataDir, "core_sources.json")
+}
+
+func (s *Service) GetUpdateSources() UpdateSources {
+	sources := UpdateSources{GitHubMirror: GitHubDownloadMirror}
+	data, err := os.ReadFile(s.sourcesPath())
+	if err == nil {
+		_ = json.Unmarshal(data, &sources)
+	}
+	return sources
+}
+
+func (s *Service) SaveUpdateSources(sources UpdateSources) error {
+	if sources.GitHubMirror == "" {
+		sources.GitHubMirror = GitHubDownloadMirror
+	}
+	data, err := json.MarshalIndent(sources, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.sourcesPath(), data, 0644)
 }
 
 func NewService(dataDir string) *Service {
@@ -666,8 +706,9 @@ func (s *Service) getCoreDownloadURLs(coreType string) ([]string, error) {
 		return nil, fmt.Errorf("no %s asset found for %s/%s in %s", coreType, goos, arch, release.TagName)
 	}
 
-	if strings.HasPrefix(assetURL, "https://github.com/") {
-		return []string{GitHubDownloadMirror + assetURL, assetURL}, nil
+	sources := s.GetUpdateSources()
+	if strings.HasPrefix(assetURL, "https://github.com/") && sources.GitHubMirror != "" {
+		return []string{strings.TrimRight(sources.GitHubMirror, "/") + "/" + assetURL, assetURL}, nil
 	}
 	return []string{assetURL}, nil
 }
@@ -743,6 +784,81 @@ func (s *Service) GetDownloadProgress(coreType string) *DownloadProgress {
 		return progress
 	}
 	return &DownloadProgress{}
+}
+
+func (s *Service) GetHealth() map[string]CoreHealth {
+	s.checkInstalledCores()
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]CoreHealth, len(s.cores))
+	for coreType, core := range s.cores {
+		path := s.getCoreBinaryPath(coreType)
+		issues := []string{}
+		installed := false
+		executable := false
+
+		if info, err := os.Stat(path); err == nil {
+			installed = true
+			executable = runtime.GOOS == "windows" || info.Mode().Perm()&0111 != 0
+			if !executable {
+				issues = append(issues, "核心文件缺少执行权限")
+			}
+		} else {
+			issues = append(issues, "核心文件不存在")
+		}
+
+		version := core.Version
+		if installed {
+			version = s.getCoreVersion(coreType)
+			if version == "" || version == "unknown" {
+				issues = append(issues, "无法读取核心版本")
+			}
+		}
+		if core.LatestVersion == "" {
+			issues = append(issues, "未获取到最新版本信息")
+		}
+		if installed && core.LatestVersion != "" && version != "" && version != "unknown" && version != core.LatestVersion {
+			issues = append(issues, "核心不是最新版本")
+		}
+
+		result[coreType] = CoreHealth{
+			CoreType:      coreType,
+			Name:          core.Name,
+			Path:          path,
+			Installed:     installed,
+			Version:       version,
+			LatestVersion: core.LatestVersion,
+			Executable:    executable,
+			Healthy:       len(issues) == 0,
+			Issues:        issues,
+		}
+	}
+	return result
+}
+
+func (s *Service) RepairCore(coreType string) error {
+	s.mu.RLock()
+	if _, ok := s.cores[coreType]; !ok {
+		s.mu.RUnlock()
+		return fmt.Errorf("unknown core type: %s", coreType)
+	}
+	s.mu.RUnlock()
+
+	if _, err := s.GetLatestVersions(); err != nil {
+		return err
+	}
+
+	binPath := s.getCoreBinaryPath(coreType)
+	_ = os.Remove(binPath)
+	if err := s.DownloadCore(coreType); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		return os.Chmod(binPath, 0755)
+	}
+	return nil
 }
 
 // Initialize 启动时自动初始化（延迟执行）

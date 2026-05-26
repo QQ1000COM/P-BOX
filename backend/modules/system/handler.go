@@ -44,6 +44,12 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/connectivity", h.TestConnectivity)
 	r.GET("/diagnostics", h.GetDiagnostics)
 	r.GET("/chatgpt-check", h.CheckChatGPT)
+	r.GET("/backup", h.DownloadBackup)
+	r.GET("/history", h.ListHistory)
+	r.POST("/history/snapshot", h.CreateSnapshot)
+	r.POST("/history/:id/restore", h.RestoreSnapshot)
+	r.GET("/security-audit", h.SecurityAudit)
+	r.GET("/rule-templates", h.RuleTemplates)
 }
 
 // GetResources 获取系统资源信息
