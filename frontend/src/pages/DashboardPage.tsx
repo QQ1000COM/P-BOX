@@ -27,7 +27,6 @@ export default function DashboardPage() {
   const [traffic, setTraffic] = useState({ up: 0, down: 0, totalUp: 0, totalDown: 0 })
   const [trafficHistory, setTrafficHistory] = useState<number[]>(Array(40).fill(0))
   const [connectionCount, setConnectionCount] = useState(0)
-  const [memoryUsage, setMemoryUsage] = useState(0)
   const [sysResources, setSysResources] = useState<SystemResources | null>(null)
 
   useEffect(() => {
@@ -36,7 +35,6 @@ export default function DashboardPage() {
       try {
         const data = await proxyApi.getStatus()
         setStatus(data)
-        setMemoryUsage(Math.floor(Math.random() * 100 + 200)) 
       } catch {
         // Ignore errors
       }
@@ -286,10 +284,13 @@ export default function DashboardPage() {
             <div className={cn(
               "text-2xl font-bold font-mono",
               themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white'
-            )}>{memoryUsage} MB</div>
+            )}>{sysResources ? formatBytes(sysResources.memoryUsed) : '--'}</div>
             <div className="text-[10px] text-slate-500 uppercase font-mono mt-0.5">{t('dashboard.memory')}</div>
             <div className="w-full bg-slate-800/50 h-1 mt-2 rounded-full overflow-hidden">
-              <div className="bg-purple-500 h-full w-1/4 shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div>
+              <div
+                className="bg-purple-500 h-full shadow-[0_0_10px_rgba(168,85,247,0.5)]"
+                style={{ width: `${Math.min(sysResources?.memoryPercent || 0, 100)}%` }}
+              />
             </div>
           </div>
         </div>

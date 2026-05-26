@@ -165,9 +165,9 @@ export default function ToolsPage() {
     try {
       setLoading('reload')
       await mihomoApi.reloadConfig()
-      alert('Reload success')
+      alert('重载成功')
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Reload failed')
+      alert((e as Error)?.message || '重载失败')
     } finally {
       setLoading(null)
     }
@@ -177,9 +177,9 @@ export default function ToolsPage() {
     try {
       setLoading('dns')
       await mihomoApi.flushDns()
-      alert('DNS cache flushed')
+      alert('DNS 缓存已清空')
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Flush failed')
+      alert((e as Error)?.message || '清空失败')
     } finally {
       setLoading(null)
     }
@@ -189,9 +189,9 @@ export default function ToolsPage() {
     try {
       setLoading('geo')
       await mihomoApi.updateGeo()
-      alert('Geo data updated')
+      alert('Geo 数据已更新')
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Update failed')
+      alert((e as Error)?.message || '更新失败')
     } finally {
       setLoading(null)
     }
@@ -203,7 +203,7 @@ export default function ToolsPage() {
       const result = await api.get<{ targets: ConnectivityResult[] }>('/system/connectivity')
       setConnectivity(result.targets)
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Connectivity test failed')
+      alert((e as Error)?.message || '连通性测试失败')
     } finally {
       setLoading(null)
     }
@@ -215,7 +215,7 @@ export default function ToolsPage() {
       const result = await api.get<DiagnosticResult>('/system/diagnostics')
       setDiagnostics(result)
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Diagnostics failed')
+      alert((e as Error)?.message || '诊断失败')
     } finally {
       setLoading(null)
     }
@@ -228,9 +228,48 @@ export default function ToolsPage() {
       await new Promise((resolve) => window.setTimeout(resolve, 2000))
       const result = await api.get<DiagnosticResult>('/system/diagnostics')
       setDiagnostics(result)
-      alert('Core restart requested')
+      alert('已请求重启核心')
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'Repair failed')
+      alert((e as Error)?.message || '修复失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleExportDiagnostics = async () => {
+    try {
+      setLoading('export')
+      const [diagnosticResult, connectivityResult] = await Promise.all([
+        api.get<DiagnosticResult>('/system/diagnostics'),
+        api.get<{ targets: ConnectivityResult[] }>('/system/connectivity'),
+      ])
+
+      setDiagnostics(diagnosticResult)
+      setConnectivity(connectivityResult.targets)
+
+      const report = [
+        '# P-BOX 诊断报告',
+        `生成时间: ${new Date().toLocaleString()}`,
+        '',
+        `总体状态: ${diagnosticResult.status.toUpperCase()}`,
+        '',
+        '## 系统诊断',
+        ...diagnosticResult.items.map((item) => `- [${item.status.toUpperCase()}] ${item.name}: ${item.detail}`),
+        '',
+        '## 连通性测试',
+        ...connectivityResult.targets.map((item) => {
+          const status = item.success ? '正常' : '失败'
+          const http = item.statusCode ? ` HTTP ${item.statusCode}` : ''
+          const detail = item.error || item.url
+          return `- [${status}] ${item.name}: ${item.latencyMs} ms${http} - ${detail}`
+        }),
+        '',
+      ].join('\n')
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      downloadText(`p-box-diagnostics-${stamp}.md`, report)
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '导出诊断报告失败')
     } finally {
       setLoading(null)
     }
@@ -242,7 +281,7 @@ export default function ToolsPage() {
       const result = await api.get<{ targets: ConnectivityResult[] }>('/system/chatgpt-check')
       setChatgptCheck(result.targets)
     } catch (e: unknown) {
-      alert((e as Error)?.message || 'ChatGPT check failed')
+      alert((e as Error)?.message || 'ChatGPT 检测失败')
     } finally {
       setLoading(null)
     }
@@ -250,7 +289,7 @@ export default function ToolsPage() {
 
   const copyText = async (text: string) => {
     await navigator.clipboard.writeText(text)
-    alert('Copied')
+    alert('已复制')
   }
 
   const runTransform = () => {
@@ -264,7 +303,7 @@ export default function ToolsPage() {
       }[transformMode]()
       setTransformOutput(output)
     } catch (e: unknown) {
-      setTransformOutput((e as Error)?.message || 'Transform failed')
+      setTransformOutput((e as Error)?.message || '转换失败')
     }
   }
 
@@ -286,13 +325,14 @@ export default function ToolsPage() {
   }
 
   const quickControls = [
-    { id: 'reload', icon: RefreshCw, label: 'Reload core', description: 'Reload the current core config', color: 'orange', onClick: handleReloadConfig },
-    { id: 'dns', icon: Trash2, label: 'Flush DNS', description: 'Clear DNS cache in the proxy core', color: 'pink', onClick: handleFlushDns },
-    { id: 'geo', icon: Globe, label: 'Update Geo data', description: 'Update GeoIP and GeoSite data', color: 'blue', onClick: handleUpdateGeo },
-    { id: 'connectivity', icon: Globe, label: 'Test Google / ChatGPT', description: 'Check access through the local proxy', color: 'green', onClick: handleConnectivityTest },
-    { id: 'diagnostics', icon: Activity, label: 'Run diagnostics', description: 'Check service, core, ports, files, and DNS', color: 'violet', onClick: handleDiagnostics },
-    { id: 'repair', icon: Wrench, label: 'Repair proxy core', description: 'Restart the proxy core and run diagnostics', color: 'red', onClick: handleRepairCore },
-    { id: 'chatgpt', icon: Globe, label: 'ChatGPT check', description: 'Test ChatGPT and OpenAI domains via proxy', color: 'cyan', onClick: handleChatGPTCheck },
+    { id: 'reload', icon: RefreshCw, label: '重载核心', description: '重新加载当前核心配置', color: 'orange', onClick: handleReloadConfig },
+    { id: 'dns', icon: Trash2, label: '清空 DNS', description: '清空代理核心的 DNS 缓存', color: 'pink', onClick: handleFlushDns },
+    { id: 'geo', icon: Globe, label: '更新 Geo 数据', description: '更新 GeoIP 和 GeoSite 数据', color: 'blue', onClick: handleUpdateGeo },
+    { id: 'connectivity', icon: Globe, label: '测试 Google / ChatGPT', description: '通过本地代理检查访问状态', color: 'green', onClick: handleConnectivityTest },
+    { id: 'diagnostics', icon: Activity, label: '运行诊断', description: '检查服务、核心、端口、文件和 DNS', color: 'violet', onClick: handleDiagnostics },
+    { id: 'export', icon: Download, label: '导出报告', description: '下载诊断和连通性测试结果', color: 'blue', onClick: handleExportDiagnostics },
+    { id: 'repair', icon: Wrench, label: '修复代理核心', description: '重启代理核心并重新运行诊断', color: 'red', onClick: handleRepairCore },
+    { id: 'chatgpt', icon: Globe, label: 'ChatGPT 检测', description: '通过代理测试 ChatGPT 和 OpenAI 域名', color: 'cyan', onClick: handleChatGPTCheck },
   ]
 
   const getColorClasses = (color: string) => {
@@ -350,7 +390,7 @@ export default function ToolsPage() {
             </div>
           </div>
           <div className={cn('flex-none text-right text-sm', themeStyle === 'apple-glass' ? 'text-slate-600' : 'text-slate-300')}>
-            <div>{item.success ? 'OK' : 'Failed'}</div>
+            <div>{item.success ? '正常' : '失败'}</div>
             <div className="text-xs opacity-70">
               {item.statusCode ? `HTTP ${item.statusCode} / ` : ''}{item.latencyMs} ms
             </div>
@@ -364,7 +404,7 @@ export default function ToolsPage() {
     <div className="space-y-6">
       <div className="glass-card p-6">
         <h2 className={cn('mb-4 text-lg font-semibold', themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white')}>
-          Quick controls
+          快速控制
         </h2>
 
         <div className="space-y-3">
@@ -409,7 +449,7 @@ export default function ToolsPage() {
               : 'divide-white/10 border-white/10 bg-white/5'
           )}>
             <div className="flex items-center justify-between gap-4 p-4">
-              <div className={cn('font-medium', themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white')}>Diagnostics</div>
+              <div className={cn('font-medium', themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white')}>诊断结果</div>
               <div className={cn(
                 'rounded-full px-2 py-1 text-xs font-medium uppercase',
                 diagnostics.status === 'ok' && 'bg-emerald-500/20 text-emerald-500',
@@ -450,14 +490,14 @@ export default function ToolsPage() {
 
       <div className="glass-card p-6">
         <h2 className={cn('mb-4 text-lg font-semibold', themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white')}>
-          More tools
+          更多工具
         </h2>
 
         <div className="grid gap-4 xl:grid-cols-2">
           <section className={panelClass}>
             <div className="mb-3 flex items-center gap-2">
               <Terminal className="h-4 w-4 text-cyan-500" />
-              <h3 className={labelClass}>Proxy quick setup</h3>
+              <h3 className={labelClass}>代理快速设置</h3>
             </div>
             <div className="space-y-2">
               {proxyCommands.map((command) => (
@@ -479,14 +519,14 @@ export default function ToolsPage() {
           <section className={panelClass}>
             <div className="mb-3 flex items-center gap-2">
               <KeyRound className="h-4 w-4 text-violet-500" />
-              <h3 className={labelClass}>Encode / decode</h3>
+              <h3 className={labelClass}>编码 / 解码</h3>
             </div>
             <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
-                ['base64-decode', 'Base64 decode'],
-                ['base64-encode', 'Base64 encode'],
-                ['url-decode', 'URL decode'],
-                ['url-encode', 'URL encode'],
+                ['base64-decode', 'Base64 解码'],
+                ['base64-encode', 'Base64 编码'],
+                ['url-decode', 'URL 解码'],
+                ['url-encode', 'URL 编码'],
               ].map(([value, label]) => (
                 <button
                   key={value}
@@ -508,37 +548,37 @@ export default function ToolsPage() {
               className="form-input min-h-[92px] resize-y"
               value={transformInput}
               onChange={(e) => setTransformInput(e.target.value)}
-              placeholder="Paste text here"
+              placeholder="在这里粘贴文本"
             />
             <div className="mt-3 flex gap-2">
-              <button className="control-btn text-xs" onClick={runTransform}>Run</button>
+              <button className="control-btn text-xs" onClick={runTransform}>执行</button>
               <button className="control-btn text-xs" onClick={() => copyText(transformOutput)} disabled={!transformOutput}>
                 <Clipboard className="h-3.5 w-3.5" />
-                Copy
+                复制
               </button>
             </div>
             <textarea
               className="form-input mt-3 min-h-[92px] resize-y"
               value={transformOutput}
               onChange={(e) => setTransformOutput(e.target.value)}
-              placeholder="Output"
+              placeholder="输出结果"
             />
           </section>
 
           <section className={panelClass}>
             <div className="mb-3 flex items-center gap-2">
               <Link2 className="h-4 w-4 text-emerald-500" />
-              <h3 className={labelClass}>Subscription analyzer</h3>
+              <h3 className={labelClass}>订阅分析器</h3>
             </div>
             <textarea
               className="form-input min-h-[130px] resize-y"
               value={subscriptionInput}
               onChange={(e) => setSubscriptionInput(e.target.value)}
-              placeholder="Paste subscription content or Base64 subscription"
+              placeholder="粘贴订阅内容或 Base64 订阅"
             />
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <div className={panelClass}>
-                <div className={mutedClass}>Nodes</div>
+                <div className={mutedClass}>节点数</div>
                 <div className="text-lg font-semibold">{subscriptionSummary.lines.length}</div>
               </div>
               {Object.entries(subscriptionSummary.protocols).slice(0, 3).map(([protocol, count]) => (
@@ -560,11 +600,11 @@ export default function ToolsPage() {
             <div className="mt-3 flex gap-2">
               <button className="control-btn text-xs" onClick={() => copyText(subscriptionSummary.decoded)} disabled={!subscriptionSummary.decoded}>
                 <Clipboard className="h-3.5 w-3.5" />
-                Copy decoded
+                复制解码内容
               </button>
               <button className="control-btn text-xs" onClick={() => downloadText('subscription.txt', subscriptionSummary.decoded)} disabled={!subscriptionSummary.decoded}>
                 <Download className="h-3.5 w-3.5" />
-                Download
+                下载
               </button>
             </div>
           </section>
@@ -572,19 +612,19 @@ export default function ToolsPage() {
           <section className={panelClass}>
             <div className="mb-3 flex items-center gap-2">
               <Clock3 className="h-4 w-4 text-orange-500" />
-              <h3 className={labelClass}>Timestamp converter</h3>
+              <h3 className={labelClass}>时间戳转换器</h3>
             </div>
             <input
               className="form-input"
               value={timestampInput}
               onChange={(e) => setTimestampInput(e.target.value)}
-              placeholder="Unix seconds or milliseconds"
+              placeholder="Unix 秒级或毫秒级时间戳"
             />
             <div className="mt-3 space-y-2">
               {timestampResult ? (
                 <>
                   <button className="w-full text-left" onClick={() => copyText(timestampResult.local)}>
-                    <div className={mutedClass}>Local</div>
+                    <div className={mutedClass}>本地时间</div>
                     <div className="break-all text-sm">{timestampResult.local}</div>
                   </button>
                   <button className="w-full text-left" onClick={() => copyText(timestampResult.iso)}>
@@ -593,17 +633,17 @@ export default function ToolsPage() {
                   </button>
                   <div className="grid grid-cols-2 gap-2">
                     <button className="text-left" onClick={() => copyText(String(timestampResult.seconds))}>
-                      <div className={mutedClass}>Seconds</div>
+                      <div className={mutedClass}>秒</div>
                       <div className="text-sm">{timestampResult.seconds}</div>
                     </button>
                     <button className="text-left" onClick={() => copyText(String(timestampResult.milliseconds))}>
-                      <div className={mutedClass}>Milliseconds</div>
+                      <div className={mutedClass}>毫秒</div>
                       <div className="text-sm">{timestampResult.milliseconds}</div>
                     </button>
                   </div>
                 </>
               ) : (
-                <div className={mutedClass}>Enter a valid timestamp.</div>
+                <div className={mutedClass}>请输入有效的时间戳。</div>
               )}
             </div>
           </section>
@@ -611,31 +651,31 @@ export default function ToolsPage() {
           <section className={cn(panelClass, 'xl:col-span-2')}>
             <div className="mb-3 flex items-center gap-2">
               <FileJson className="h-4 w-4 text-blue-500" />
-              <h3 className={labelClass}>Config formatter</h3>
+              <h3 className={labelClass}>配置格式化</h3>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               <textarea
                 className="form-input min-h-[180px] resize-y font-mono text-xs"
                 value={configInput}
                 onChange={(e) => setConfigInput(e.target.value)}
-                placeholder="Paste JSON, Clash YAML, or sing-box config"
+                placeholder="粘贴 JSON、Clash YAML 或 sing-box 配置"
               />
               <textarea
                 className="form-input min-h-[180px] resize-y font-mono text-xs"
                 value={configOutput}
                 onChange={(e) => setConfigOutput(e.target.value)}
-                placeholder="Formatted output"
+                placeholder="格式化后的输出"
               />
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button className="control-btn text-xs" onClick={formatConfig}>Format</button>
+              <button className="control-btn text-xs" onClick={formatConfig}>格式化</button>
               <button className="control-btn text-xs" onClick={() => copyText(configOutput)} disabled={!configOutput}>
                 <Clipboard className="h-3.5 w-3.5" />
-                Copy
+                复制
               </button>
               <button className="control-btn text-xs" onClick={() => downloadText('p-box-config.txt', configOutput)} disabled={!configOutput}>
                 <Download className="h-3.5 w-3.5" />
-                Download
+                下载
               </button>
             </div>
           </section>

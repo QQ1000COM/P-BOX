@@ -21,8 +21,13 @@ const pathToNavKey: Record<string, string> = {
   '/ruleset': 'nav.ruleset',
   '/config-generator': 'nav.configGenerator',
   '/core-manage': 'nav.coreManage',
+  '/proxy-settings': 'nav.proxySettings',
+  '/singbox-settings': 'nav.singboxSettings',
+  '/singbox-ruleset': 'nav.singboxRuleset',
+  '/wireguard': 'nav.wireguard',
   '/tools': 'nav.tools',
   '/settings': 'nav.settings',
+  '/legal': 'legal.title',
 }
 
 export default function Header() {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -25,8 +26,9 @@ const (
 
 // CDN 镜像地址
 const (
-	MihomoCDNBase  = "https://ghfast.top/https://github.com/MetaCubeX/mihomo/releases/download"
-	SingboxCDNBase = "https://ghfast.top/https://github.com/SagerNet/sing-box/releases/download"
+	MihomoReleaseAPI     = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+	SingboxReleaseAPI    = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+	GitHubDownloadMirror = "https://ghfast.top/"
 )
 
 type CoreStatus struct {
@@ -47,6 +49,16 @@ type DownloadProgress struct {
 	Progress    float64 `json:"progress"`
 	Speed       int64   `json:"speed"`
 	Error       string  `json:"error,omitempty"`
+}
+
+type GitHubRelease struct {
+	TagName string        `json:"tag_name"`
+	Assets  []GitHubAsset `json:"assets"`
+}
+
+type GitHubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
 type Service struct {
@@ -84,6 +96,8 @@ func NewService(dataDir string) *Service {
 		Installed: false,
 		Path:      filepath.Join(dataDir, "cores", "sing-box"),
 	}
+	s.cores["mihomo"].Path = s.getCoreBinaryPath("mihomo")
+	s.cores["singbox"].Path = s.getCoreBinaryPath("singbox")
 
 	s.loadSavedStatus()
 	s.checkInstalledCores()
@@ -170,6 +184,10 @@ func (s *Service) getCoreBinaryPath(coreType string) string {
 		binName = fmt.Sprintf("mihomo-%s-%s", goos, arch)
 	case "singbox":
 		binName = fmt.Sprintf("sing-box-%s-%s", goos, arch)
+	}
+
+	if goos == "windows" {
+		binName += ".exe"
 	}
 
 	return filepath.Join(s.dataDir, "cores", binName)
@@ -278,49 +296,53 @@ func (s *Service) GetLatestVersions() (map[string]string, error) {
 }
 
 func (s *Service) fetchMihomoLatestVersion() (string, error) {
-	resp, err := http.Get("https://api.github.com/repos/MetaCubeX/mihomo/releases/latest")
+	release, err := s.fetchLatestRelease(MihomoReleaseAPI)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
-	}
-
-	// 去掉版本号前的 v 前缀
-	version := release.TagName
-	if len(version) > 0 && version[0] == 'v' {
-		version = version[1:]
-	}
-	return version, nil
+	return normalizeVersion(release.TagName), nil
 }
 
 func (s *Service) fetchSingboxLatestVersion() (string, error) {
-	resp, err := http.Get("https://api.github.com/repos/SagerNet/sing-box/releases/latest")
+	release, err := s.fetchLatestRelease(SingboxReleaseAPI)
 	if err != nil {
 		return "", err
 	}
+
+	return normalizeVersion(release.TagName), nil
+}
+
+func (s *Service) fetchLatestRelease(apiURL string) (*GitHubRelease, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "P-BOX")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 
-	var release struct {
-		TagName string `json:"tag_name"`
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github release api returned HTTP %d", resp.StatusCode)
 	}
 
+	var release GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
+		return nil, err
 	}
+	if release.TagName == "" {
+		return nil, fmt.Errorf("release tag not found")
+	}
+	return &release, nil
+}
 
-	// 去掉版本号前的 v 前缀
-	version := release.TagName
-	if len(version) > 0 && version[0] == 'v' {
-		version = version[1:]
-	}
-	return version, nil
+func normalizeVersion(tag string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
 }
 
 func (s *Service) SwitchCore(coreType string) error {
@@ -374,8 +396,7 @@ func (s *Service) DownloadCore(coreType string) error {
 		s.mu.Unlock()
 	}()
 
-	// 获取 CDN 和官方下载地址
-	cdnURL, officialURL, err := s.getCoreDownloadURLs(coreType)
+	downloadURLs, err := s.getCoreDownloadURLs(coreType)
 	if err != nil {
 		s.mu.Lock()
 		s.downloadProgress[coreType].Error = err.Error()
@@ -383,24 +404,21 @@ func (s *Service) DownloadCore(coreType string) error {
 		return err
 	}
 
-	// 尝试 CDN 下载
-	fmt.Printf("📦 尝试从 CDN 下载 %s: %s\n", coreType, cdnURL)
-	err = s.downloadFromURL(coreType, cdnURL)
-	if err != nil {
-		fmt.Printf("⚠️ CDN 下载失败: %v，尝试官方地址...\n", err)
-		// 回退到官方地址
-		fmt.Printf("📦 尝试从官方下载 %s: %s\n", coreType, officialURL)
-		err = s.downloadFromURL(coreType, officialURL)
-		if err != nil {
-			s.mu.Lock()
-			s.downloadProgress[coreType].Error = err.Error()
-			s.mu.Unlock()
-			return fmt.Errorf("下载失败: %v", err)
+	var lastErr error
+	for _, downloadURL := range downloadURLs {
+		fmt.Printf("Downloading %s from %s\n", coreType, downloadURL)
+		if err = s.downloadFromURL(coreType, downloadURL); err == nil {
+			fmt.Printf("%s download completed\n", coreType)
+			return nil
 		}
+		lastErr = err
+		fmt.Printf("Download failed: %v\n", err)
 	}
 
-	fmt.Printf("✅ %s 下载完成\n", coreType)
-	return nil
+	s.mu.Lock()
+	s.downloadProgress[coreType].Error = lastErr.Error()
+	s.mu.Unlock()
+	return fmt.Errorf("download failed: %v", lastErr)
 }
 
 // downloadFromURL 从指定 URL 下载核心
@@ -480,6 +498,10 @@ func (s *Service) downloadFromURL(coreType, downloadURL string) error {
 
 // extractCore 解压核心文件
 func (s *Service) extractCore(archivePath, destPath, coreType string) error {
+	if s.isZipFile(archivePath) {
+		return s.extractZipCore(archivePath, destPath, coreType)
+	}
+
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -533,50 +555,184 @@ func (s *Service) extractCore(archivePath, destPath, coreType string) error {
 	return fmt.Errorf("executable not found in archive")
 }
 
+func (s *Service) isZipFile(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	signature := make([]byte, 4)
+	if _, err := io.ReadFull(file, signature); err != nil {
+		return false
+	}
+	return string(signature) == "PK\x03\x04"
+}
+
+func (s *Service) extractZipCore(archivePath, destPath, coreType string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("zip open failed: %v", err)
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() || !s.isCoreExecutableName(file.Name, coreType) {
+			continue
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return err
+		}
+
+		outFile, err := os.Create(destPath)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+
+		_, copyErr := io.Copy(outFile, rc)
+		closeErr := outFile.Close()
+		rc.Close()
+
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+
+	return fmt.Errorf("executable not found in archive")
+}
+
+func (s *Service) isCoreExecutableName(name, coreType string) bool {
+	base := strings.ToLower(filepath.Base(name))
+	switch coreType {
+	case "mihomo":
+		return base == "mihomo" || base == "mihomo.exe"
+	case "singbox":
+		return base == "sing-box" || base == "sing-box.exe"
+	default:
+		return false
+	}
+}
+
 // getCoreDownloadURLs 获取下载 URL（CDN 优先，官方备用）
-func (s *Service) getCoreDownloadURLs(coreType string) (cdnURL, officialURL string, err error) {
+func (s *Service) getCoreDownloadURLs(coreType string) ([]string, error) {
 	arch := runtime.GOARCH
 	goos := runtime.GOOS
 
 	s.mu.RLock()
-	version := s.cores[coreType].LatestVersion
+	core, ok := s.cores[coreType]
+	if !ok {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("unknown core type")
+	}
+	version := core.LatestVersion
 	s.mu.RUnlock()
 
 	if version == "" {
-		return "", "", fmt.Errorf("version not found, please check latest version first")
+		return nil, fmt.Errorf("version not found, please check latest version first")
 	}
 
-	// 转换架构名称
-	archName := arch
-	if arch == "amd64" {
-		archName = "amd64"
-	} else if arch == "arm64" {
-		archName = "arm64"
-	}
-
-	// 转换系统名称
-	osName := goos
-	if goos == "darwin" {
-		osName = "darwin"
-	}
-
+	var apiURL string
 	switch coreType {
 	case "mihomo":
-		// mihomo releases 格式: mihomo-darwin-arm64-v1.18.10.gz
-		filename := fmt.Sprintf("mihomo-%s-%s-v%s.gz", osName, archName, version)
-		cdnURL = fmt.Sprintf("%s/v%s/%s", MihomoCDNBase, version, filename)
-		officialURL = fmt.Sprintf("https://github.com/MetaCubeX/mihomo/releases/download/v%s/%s", version, filename)
-		return cdnURL, officialURL, nil
-
+		apiURL = MihomoReleaseAPI
 	case "singbox":
-		// sing-box releases 格式: sing-box-1.10.5-darwin-arm64.tar.gz
-		filename := fmt.Sprintf("sing-box-%s-%s-%s.tar.gz", version, osName, archName)
-		cdnURL = fmt.Sprintf("%s/v%s/%s", SingboxCDNBase, version, filename)
-		officialURL = fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/%s", version, filename)
-		return cdnURL, officialURL, nil
+		apiURL = SingboxReleaseAPI
+	default:
+		return nil, fmt.Errorf("unknown core type")
 	}
 
-	return "", "", fmt.Errorf("unknown core type")
+	release, err := s.fetchLatestRelease(apiURL)
+	if err != nil {
+		return nil, err
+	}
+
+	releaseVersion := normalizeVersion(release.TagName)
+	if releaseVersion != "" && releaseVersion != version {
+		version = releaseVersion
+		s.mu.Lock()
+		if core, ok := s.cores[coreType]; ok {
+			core.LatestVersion = version
+		}
+		s.mu.Unlock()
+	}
+
+	assetName := s.expectedAssetName(coreType, goos, arch, version)
+	assetURL := s.findAssetURL(release.Assets, assetName, coreType, goos, arch, version)
+	if assetURL == "" {
+		return nil, fmt.Errorf("no %s asset found for %s/%s in %s", coreType, goos, arch, release.TagName)
+	}
+
+	if strings.HasPrefix(assetURL, "https://github.com/") {
+		return []string{GitHubDownloadMirror + assetURL, assetURL}, nil
+	}
+	return []string{assetURL}, nil
+}
+
+func (s *Service) expectedAssetName(coreType, goos, arch, version string) string {
+	switch coreType {
+	case "mihomo":
+		if goos == "windows" {
+			return fmt.Sprintf("mihomo-%s-%s-v%s.zip", goos, arch, version)
+		}
+		return fmt.Sprintf("mihomo-%s-%s-v%s.gz", goos, arch, version)
+	case "singbox":
+		if goos == "windows" {
+			return fmt.Sprintf("sing-box-%s-%s-%s.zip", version, goos, arch)
+		}
+		return fmt.Sprintf("sing-box-%s-%s-%s.tar.gz", version, goos, arch)
+	default:
+		return ""
+	}
+}
+
+func (s *Service) findAssetURL(assets []GitHubAsset, expectedName, coreType, goos, arch, version string) string {
+	for _, asset := range assets {
+		if asset.Name == expectedName {
+			return asset.BrowserDownloadURL
+		}
+	}
+
+	prefix := ""
+	suffix := ""
+	switch coreType {
+	case "mihomo":
+		prefix = fmt.Sprintf("mihomo-%s-%s-", goos, arch)
+		if goos == "windows" {
+			suffix = fmt.Sprintf("-v%s.zip", version)
+		} else {
+			suffix = fmt.Sprintf("-v%s.gz", version)
+		}
+	case "singbox":
+		prefix = fmt.Sprintf("sing-box-%s-%s-%s", version, goos, arch)
+		if goos == "windows" {
+			suffix = ".zip"
+		} else {
+			suffix = ".tar.gz"
+		}
+	}
+
+	for _, asset := range assets {
+		if strings.HasPrefix(asset.Name, prefix) && strings.HasSuffix(asset.Name, suffix) {
+			name := strings.ToLower(asset.Name)
+			if strings.Contains(name, "legacy") || strings.Contains(name, "glibc") ||
+				strings.Contains(name, "musl") || strings.Contains(name, "go12") {
+				continue
+			}
+			return asset.BrowserDownloadURL
+		}
+	}
+
+	for _, asset := range assets {
+		if strings.HasPrefix(asset.Name, prefix) && strings.HasSuffix(asset.Name, suffix) {
+			return asset.BrowserDownloadURL
+		}
+	}
+
+	return ""
 }
 
 func (s *Service) GetDownloadProgress(coreType string) *DownloadProgress {
@@ -600,19 +756,21 @@ func (s *Service) Initialize(delaySeconds int) {
 		// 1. 检测最新版本
 		s.GetLatestVersions()
 
-		// 2. 检查是否需要自动下载 mihomo 核心
-		s.mu.RLock()
-		mihomoInstalled := s.cores["mihomo"].Installed
-		mihomoLatestVersion := s.cores["mihomo"].LatestVersion
-		s.mu.RUnlock()
+		// 2. Ensure both built-in cores are available.
+		for _, coreType := range []string{"mihomo", "singbox"} {
+			s.mu.RLock()
+			coreInstalled := s.cores[coreType].Installed
+			coreLatestVersion := s.cores[coreType].LatestVersion
+			s.mu.RUnlock()
 
-		if !mihomoInstalled && mihomoLatestVersion != "" {
-			fmt.Printf("📦 检测到未安装 mihomo 核心，开始自动下载...\n")
-			fmt.Printf("   平台: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-			if err := s.DownloadCore("mihomo"); err != nil {
-				fmt.Printf("❌ 自动下载 mihomo 失败: %v\n", err)
-			} else {
-				fmt.Printf("✅ mihomo 核心自动下载完成\n")
+			if !coreInstalled && coreLatestVersion != "" {
+				fmt.Printf("Auto downloading missing %s core...\n", coreType)
+				fmt.Printf("   platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+				if err := s.DownloadCore(coreType); err != nil {
+					fmt.Printf("Auto download %s failed: %v\n", coreType, err)
+				} else {
+					fmt.Printf("%s core auto download completed\n", coreType)
+				}
 			}
 		}
 
