@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +34,36 @@ func NewSettingsHandler(dataDir string) *SettingsHandler {
 // SetProxyService 设置代理服务引用
 func (h *SettingsHandler) SetProxyService(s *Service) {
 	h.proxyService = s
+	if err := h.syncProxyServiceSettings(h.GetCurrentSettings()); err != nil {
+		fmt.Printf("同步代理设置失败: %v\n", err)
+	}
+}
+
+func (h *SettingsHandler) syncProxyServiceSettings(settings *ProxySettings) error {
+	if h.proxyService == nil || settings == nil {
+		return nil
+	}
+
+	transparentMode := "off"
+	if settings.TUN.Enable {
+		transparentMode = "tun"
+	}
+
+	return h.proxyService.PatchConfig(map[string]interface{}{
+		"mixedPort":       float64(settings.MixedPort),
+		"socksPort":       float64(settings.SocksPort),
+		"redirPort":       float64(settings.RedirPort),
+		"tproxyPort":      float64(settings.TProxyPort),
+		"allowLan":        settings.AllowLan,
+		"ipv6":            settings.IPv6,
+		"mode":            settings.Mode,
+		"logLevel":        settings.LogLevel,
+		"tunEnabled":      settings.TUN.Enable,
+		"tunStack":        settings.TUN.Stack,
+		"transparentMode": transparentMode,
+		"autoStart":       settings.AutoStart,
+		"autoStartDelay":  float64(settings.AutoStartDelay),
+	})
 }
 
 // RegisterRoutes 注册路由
@@ -72,9 +103,57 @@ func (h *SettingsHandler) loadSettings() error {
 	if settings.AutoStartDelay == 0 {
 		settings.AutoStartDelay = 15 // 默认延迟 15 秒
 	}
+	normalizeProxySettings(&settings)
 
 	h.settings = &settings
 	return nil
+}
+
+func normalizeProxySettings(settings *ProxySettings) {
+	if settings == nil {
+		return
+	}
+	defaults := GetDefaultProxySettings()
+	if settings.DNS.Listen == "" {
+		settings.DNS = defaults.DNS
+	}
+	if settings.TUN.Device == "" {
+		settings.TUN = defaults.TUN
+	} else {
+		if settings.TUN.Stack == "" {
+			settings.TUN.Stack = defaults.TUN.Stack
+		}
+		if settings.TUN.MTU == 0 {
+			settings.TUN.MTU = defaults.TUN.MTU
+		}
+		if settings.TUN.UDPTimeout == 0 {
+			settings.TUN.UDPTimeout = defaults.TUN.UDPTimeout
+		}
+		if len(settings.TUN.DNSHijack) == 0 {
+			settings.TUN.DNSHijack = defaults.TUN.DNSHijack
+		}
+		if len(settings.TUN.Inet4Address) == 0 {
+			settings.TUN.Inet4Address = defaults.TUN.Inet4Address
+		}
+		if len(settings.TUN.RouteExcludeAddress) == 0 {
+			settings.TUN.RouteExcludeAddress = defaults.TUN.RouteExcludeAddress
+		}
+	}
+	settings.TUN.RouteExcludeAddress = filterDockerSubnets(settings.TUN.RouteExcludeAddress)
+	if settings.TUN.Enable && settings.DNS.Listen == "0.0.0.0:53" {
+		settings.DNS.Listen = defaults.DNS.Listen
+	}
+}
+
+func filterDockerSubnets(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "172.16.0.0/12" {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return filtered
 }
 
 // saveSettings 保存设置
@@ -114,6 +193,7 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 		})
 		return
 	}
+	normalizeProxySettings(&settings)
 
 	h.mu.Lock()
 	h.settings = &settings
@@ -130,18 +210,7 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 
 	// 同步到 proxy 服务
 	if h.proxyService != nil {
-		if err := h.proxyService.PatchConfig(map[string]interface{}{
-			"mixedPort":      float64(settings.MixedPort),
-			"socksPort":      float64(settings.SocksPort),
-			"redirPort":      float64(settings.RedirPort),
-			"tproxyPort":     float64(settings.TProxyPort),
-			"allowLan":       settings.AllowLan,
-			"ipv6":           settings.IPv6,
-			"mode":           settings.Mode,
-			"logLevel":       settings.LogLevel,
-			"autoStart":      settings.AutoStart,
-			"autoStartDelay": float64(settings.AutoStartDelay),
-		}); err != nil {
+		if err := h.syncProxyServiceSettings(&settings); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    1,
 				"message": "Failed to sync runtime settings: " + err.Error(),
@@ -173,18 +242,7 @@ func (h *SettingsHandler) ResetSettings(c *gin.Context) {
 
 	if h.proxyService != nil {
 		defaults := h.settings
-		if err := h.proxyService.PatchConfig(map[string]interface{}{
-			"mixedPort":      float64(defaults.MixedPort),
-			"socksPort":      float64(defaults.SocksPort),
-			"redirPort":      float64(defaults.RedirPort),
-			"tproxyPort":     float64(defaults.TProxyPort),
-			"allowLan":       defaults.AllowLan,
-			"ipv6":           defaults.IPv6,
-			"mode":           defaults.Mode,
-			"logLevel":       defaults.LogLevel,
-			"autoStart":      defaults.AutoStart,
-			"autoStartDelay": float64(defaults.AutoStartDelay),
-		}); err != nil {
+		if err := h.syncProxyServiceSettings(defaults); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    1,
 				"message": "Failed to sync runtime settings: " + err.Error(),
@@ -267,6 +325,13 @@ func (h *SettingsHandler) ApplyPreset(c *gin.Context) {
 		})
 		return
 	}
+	if err := h.syncProxyServiceSettings(h.settings); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    1,
+			"message": "Failed to sync runtime settings: " + err.Error(),
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -306,14 +371,22 @@ func getGatewayPreset() *ProxySettings {
 	s.TUN.Stack = "mixed"
 	s.TUN.MTU = 9000
 	s.TUN.GSO = true
-	s.TUN.AutoRoute = true
-	s.TUN.AutoRedirect = true
-	s.TUN.StrictRoute = true
+	s.TUN.AutoRoute = false
+	s.TUN.AutoRedirect = false
+	s.TUN.StrictRoute = false
 	s.TUN.EndpointIndependentNat = true
+	s.TUN.Inet4Address = []string{"198.18.0.1/16"}
+	s.TUN.RouteExcludeAddress = []string{
+		"192.168.0.0/16",
+		"10.0.0.0/8",
+		"127.0.0.0/8",
+		"fc00::/7",
+		"fe80::/10",
+	}
 
 	// DNS
 	s.DNS.Enable = true
-	s.DNS.Listen = "0.0.0.0:53"
+	s.DNS.Listen = "0.0.0.0:1053"
 	s.DNS.EnhancedMode = "fake-ip"
 	s.DNS.RespectRules = true
 

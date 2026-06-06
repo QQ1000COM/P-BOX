@@ -551,7 +551,7 @@ func (g *SingboxGenerator) generateRoute(options ConfigGeneratorOptions) Singbox
 			// DNS 劫持
 			{Protocol: []string{"dns"}, Outbound: "dns-out"},
 			// 私有地址直连
-			{IPCidr: []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Outbound: "direct"},
+			{IPCidr: []string{"127.0.0.0/8", "10.0.0.0/8", "192.168.0.0/16"}, Outbound: "direct"},
 			// 中国直连
 			{GeoIP: []string{"cn"}, Outbound: "direct"},
 			{GeoSite: []string{"cn"}, Outbound: "direct"},

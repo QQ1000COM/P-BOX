@@ -114,6 +114,7 @@ type TUNSettings struct {
 	StrictRoute         bool     `json:"strictRoute" yaml:"strict-route"`
 	UDPTimeout          int      `json:"udpTimeout" yaml:"udp-timeout"`
 	DNSHijack           []string `json:"dnsHijack" yaml:"dns-hijack"`
+	Inet4Address        []string `json:"inet4Address" yaml:"inet4-address"`
 
 	// 高级路由
 	EndpointIndependentNat bool     `json:"endpointIndependentNat" yaml:"endpoint-independent-nat"`
@@ -158,7 +159,7 @@ func GetDefaultProxySettings() *ProxySettings {
 		// 基础设置
 		AllowLan:       true,
 		BindAddress:    "*",
-		AutoStart:      false,
+		AutoStart:      true,
 		AutoStartDelay: 15, // 默认延迟15秒启动
 
 		// 运行模式
@@ -225,24 +226,24 @@ func GetDefaultProxySettings() *ProxySettings {
 
 		// TUN 设置
 		TUN: TUNSettings{
-			Enable:                 false, // 默认关闭，需要 root 权限
+			Enable:                 true, // Linux server gateway mode is enabled by default.
 			Device:                 "mihomo",
 			Stack:                  "mixed",
 			MTU:                    9000,
 			GSO:                    true,
 			GSOMaxSize:             65536,
-			AutoRoute:              true,
-			AutoRedirect:           true,
+			AutoRoute:              false,
+			AutoRedirect:           false,
 			AutoDetectInterface:    true,
-			StrictRoute:            true,
+			StrictRoute:            false,
 			UDPTimeout:             300,
 			DNSHijack:              []string{"any:53", "tcp://any:53"},
+			Inet4Address:           []string{"198.18.0.1/16"},
 			EndpointIndependentNat: true,
 			RouteAddress:           []string{},
 			RouteExcludeAddress: []string{
 				"192.168.0.0/16",
 				"10.0.0.0/8",
-				"172.16.0.0/12",
 				"127.0.0.0/8",
 				"fc00::/7",
 				"fe80::/10",

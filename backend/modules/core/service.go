@@ -700,8 +700,7 @@ func (s *Service) getCoreDownloadURLs(coreType string) ([]string, error) {
 		s.mu.Unlock()
 	}
 
-	assetName := s.expectedAssetName(coreType, goos, arch, version)
-	assetURL := s.findAssetURL(release.Assets, assetName, coreType, goos, arch, version)
+	assetURL := s.findBestAssetURL(release.Assets, coreType, goos, arch, version)
 	if assetURL == "" {
 		return nil, fmt.Errorf("no %s asset found for %s/%s in %s", coreType, goos, arch, release.TagName)
 	}
@@ -713,67 +712,168 @@ func (s *Service) getCoreDownloadURLs(coreType string) ([]string, error) {
 	return []string{assetURL}, nil
 }
 
-func (s *Service) expectedAssetName(coreType, goos, arch, version string) string {
+func (s *Service) findBestAssetURL(assets []GitHubAsset, coreType, goos, arch, version string) string {
+	bestScore := 0
+	bestURL := ""
+	for _, asset := range assets {
+		score := scoreCoreAsset(asset.Name, coreType, goos, arch, version)
+		if score > bestScore {
+			bestScore = score
+			bestURL = asset.BrowserDownloadURL
+		}
+	}
+	return bestURL
+}
+
+func scoreCoreAsset(assetName, coreType, goos, arch, version string) int {
+	name := strings.ToLower(assetName)
+	version = strings.ToLower(strings.TrimPrefix(version, "v"))
+	if isNonRuntimeAsset(name) {
+		return 0
+	}
+
+	score := 0
 	switch coreType {
 	case "mihomo":
-		if goos == "windows" {
-			return fmt.Sprintf("mihomo-%s-%s-v%s.zip", goos, arch, version)
+		if !strings.HasPrefix(name, "mihomo-") || !strings.Contains(name, "-"+goos+"-") {
+			return 0
 		}
-		return fmt.Sprintf("mihomo-%s-%s-v%s.gz", goos, arch, version)
+		if goos == "windows" {
+			if !strings.HasSuffix(name, ".zip") {
+				return 0
+			}
+			score += 20
+		} else if strings.HasSuffix(name, ".gz") && !strings.HasSuffix(name, ".tar.gz") {
+			score += 20
+		} else {
+			return 0
+		}
+		if version != "" && strings.Contains(name, "-v"+version) {
+			score += 20
+		}
+		archScore := scoreArchMatch(name, arch)
+		if archScore == 0 {
+			return 0
+		}
+		score += archScore
+		score += scoreMihomoVariant(name, arch)
 	case "singbox":
-		if goos == "windows" {
-			return fmt.Sprintf("sing-box-%s-%s-%s.zip", version, goos, arch)
+		if !strings.HasPrefix(name, "sing-box-") || !strings.Contains(name, "-"+goos+"-") {
+			return 0
 		}
-		return fmt.Sprintf("sing-box-%s-%s-%s.tar.gz", version, goos, arch)
+		if goos == "windows" {
+			if !strings.HasSuffix(name, ".zip") {
+				return 0
+			}
+			score += 20
+		} else if strings.HasSuffix(name, ".tar.gz") {
+			score += 20
+		} else {
+			return 0
+		}
+		if version != "" && strings.Contains(name, "sing-box-"+version+"-") {
+			score += 20
+		}
+		archScore := scoreArchMatch(name, arch)
+		if archScore == 0 {
+			return 0
+		}
+		score += archScore
 	default:
-		return ""
+		return 0
+	}
+
+	return score
+}
+
+func isNonRuntimeAsset(name string) bool {
+	blocked := []string{
+		".sha256", ".sha512", ".sig", ".asc", ".pem", ".spdx", ".json",
+		"checksum", "checksums", "source-code", "source_code",
+	}
+	for _, token := range blocked {
+		if strings.Contains(name, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func scoreArchMatch(name, arch string) int {
+	for index, candidate := range releaseArchCandidates(arch) {
+		if assetNameHasArch(name, candidate) {
+			return 80 - index*5
+		}
+	}
+	return 0
+}
+
+func assetNameHasArch(name, candidate string) bool {
+	name = strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	candidate = strings.ReplaceAll(strings.ToLower(candidate), "_", "-")
+
+	if strings.Contains(candidate, "-") {
+		return strings.Contains(name, "-"+candidate+"-") ||
+			strings.Contains(name, "-"+candidate+".") ||
+			strings.HasSuffix(name, "-"+candidate)
+	}
+
+	needle := "-" + candidate
+	for start := 0; start < len(name); {
+		index := strings.Index(name[start:], needle)
+		if index < 0 {
+			break
+		}
+		index += start
+		nextIndex := index + len(needle)
+		if nextIndex >= len(name) {
+			return true
+		}
+		next := name[nextIndex]
+		if next == '.' {
+			return true
+		}
+		start = index + 1
+	}
+	return false
+}
+
+func releaseArchCandidates(arch string) []string {
+	switch arch {
+	case "amd64":
+		return []string{"amd64-compatible", "amd64-v1", "amd64", "x86_64"}
+	case "386":
+		return []string{"386", "i386", "x86"}
+	case "arm64":
+		return []string{"arm64", "aarch64"}
+	case "arm":
+		return []string{"armv7", "armv7l", "arm"}
+	default:
+		return []string{arch}
 	}
 }
 
-func (s *Service) findAssetURL(assets []GitHubAsset, expectedName, coreType, goos, arch, version string) string {
-	for _, asset := range assets {
-		if asset.Name == expectedName {
-			return asset.BrowserDownloadURL
+func scoreMihomoVariant(name, arch string) int {
+	score := 0
+	if arch == "amd64" {
+		switch {
+		case strings.Contains(name, "compatible"):
+			score += 40
+		case strings.Contains(name, "amd64-v1"):
+			score += 35
+		case strings.Contains(name, "amd64-v2"):
+			score += 5
+		case strings.Contains(name, "amd64-v3"):
+			score -= 20
 		}
 	}
-
-	prefix := ""
-	suffix := ""
-	switch coreType {
-	case "mihomo":
-		prefix = fmt.Sprintf("mihomo-%s-%s-", goos, arch)
-		if goos == "windows" {
-			suffix = fmt.Sprintf("-v%s.zip", version)
-		} else {
-			suffix = fmt.Sprintf("-v%s.gz", version)
-		}
-	case "singbox":
-		prefix = fmt.Sprintf("sing-box-%s-%s-%s", version, goos, arch)
-		if goos == "windows" {
-			suffix = ".zip"
-		} else {
-			suffix = ".tar.gz"
-		}
+	if strings.Contains(name, "legacy") || strings.Contains(name, "go12") {
+		score -= 40
 	}
-
-	for _, asset := range assets {
-		if strings.HasPrefix(asset.Name, prefix) && strings.HasSuffix(asset.Name, suffix) {
-			name := strings.ToLower(asset.Name)
-			if strings.Contains(name, "legacy") || strings.Contains(name, "glibc") ||
-				strings.Contains(name, "musl") || strings.Contains(name, "go12") {
-				continue
-			}
-			return asset.BrowserDownloadURL
-		}
+	if strings.Contains(name, "glibc") || strings.Contains(name, "musl") {
+		score -= 10
 	}
-
-	for _, asset := range assets {
-		if strings.HasPrefix(asset.Name, prefix) && strings.HasSuffix(asset.Name, suffix) {
-			return asset.BrowserDownloadURL
-		}
-	}
-
-	return ""
+	return score
 }
 
 func (s *Service) GetDownloadProgress(coreType string) *DownloadProgress {

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"p-box/backend/modules/system"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"sync"
@@ -117,7 +118,7 @@ func NewService(dataDir string) *Service {
 			TunEnabled:         defaultTunEnabled,
 			TunStack:           "mixed",
 			TransparentMode:    defaultTransparentMode,
-			AutoStart:          false,
+			AutoStart:          true,
 			AutoStartDelay:     15, // 默认延迟 15 秒
 		},
 		configGenerator:  NewConfigGenerator(dataDir),
@@ -285,12 +286,13 @@ func (s *Service) Start() error {
 	if s.running {
 		return fmt.Errorf("proxy is already running")
 	}
+	s.killStaleCoreProcesses(corePath)
 
 	// 创建运行时目录
 	runtimeDir := filepath.Join(s.dataDir, "runtime")
 	os.MkdirAll(runtimeDir, 0755)
 
-	// 检查并处理系统 DNS 服务（TUN 模式需要 53 端口）
+	// 检查并处理系统环境。P-BOX 使用 1053 接收 Docker DNS 转发，不抢宿主机 53 端口。
 	if s.config.TunEnabled || s.config.TransparentMode == "tun" {
 		s.prepareSystemForTUN()
 	}
@@ -353,6 +355,17 @@ func (s *Service) Start() error {
 	return nil
 }
 
+func (s *Service) killStaleCoreProcesses(corePath string) {
+	if runtime.GOOS != "linux" || corePath == "" {
+		return
+	}
+	coreDir := filepath.Dir(corePath)
+	script := fmt.Sprintf(`for pid in $(ps -eo pid=,args= | awk '$0 ~ /^ *[0-9]+ %s\/(mihomo|sing-box)/ {print $1}'); do
+  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+done`, regexp.QuoteMeta(coreDir))
+	exec.Command("sh", "-c", script).Run()
+}
+
 // configureAllBrowsers 配置所有浏览器使用系统代理
 func (s *Service) configureAllBrowsers() {
 	// 设置备份路径
@@ -403,7 +416,7 @@ func (s *Service) Stop() error {
 		fmt.Printf("⚠️ 恢复浏览器设置失败: %v\n", err)
 	}
 
-	return nil
+	return s.saveConfig()
 }
 
 func (s *Service) Restart() error {
@@ -1010,18 +1023,86 @@ func (s *Service) ResetConfigTemplate() {
 //
 //  2. 设置 IP 转发
 func (s *Service) prepareSystemForTUN() {
-	// 检查是否为 Linux
 	if runtime.GOOS != "linux" {
 		return
 	}
 
-	// 1. 检查并释放 53 端口
-	s.releasePort53()
-
-	// 2. 启用 IP 转发
 	exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").Run()
 	exec.Command("sysctl", "-w", "net.ipv6.conf.all.forwarding=1").Run()
-	s.addLog("已启用 IP 转发")
+	s.addLog("IP forwarding enabled")
+	s.installDockerDNSProxy()
+}
+
+func (s *Service) installDockerDNSProxy() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+
+	scriptPath := "/usr/local/sbin/p-box-docker-dns-proxy.sh"
+	servicePath := "/etc/systemd/system/p-box-docker-dns-proxy.service"
+	script := `#!/bin/sh
+set -eu
+
+DNS_PORT="${PBOX_DNS_PORT:-1053}"
+IPTABLES="$(command -v iptables || true)"
+
+if [ -z "$IPTABLES" ]; then
+  exit 0
+fi
+
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if ip link show mihomo >/dev/null 2>&1; then
+    ip route replace 198.18.0.0/16 dev mihomo 2>/dev/null || true
+    break
+  fi
+  sleep 1
+done
+
+{ ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(docker0|br-|podman|cni|nerdctl)' || true; } | while read -r iface; do
+  [ -n "$iface" ] || continue
+  "$IPTABLES" -C INPUT -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT || true
+  "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT || true
+  "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport 7892 -j ACCEPT || true
+  "$IPTABLES" -C INPUT -i "$iface" -p udp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport 7892 -j ACCEPT || true
+  "$IPTABLES" -C FORWARD -i "$iface" -o mihomo -j ACCEPT 2>/dev/null || "$IPTABLES" -I FORWARD 1 -i "$iface" -o mihomo -j ACCEPT || true
+  "$IPTABLES" -C FORWARD -i mihomo -o "$iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || "$IPTABLES" -I FORWARD 1 -i mihomo -o "$iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null; do :; done
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null; do :; done
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 2>/dev/null; do :; done
+  "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
+  "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
+  "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 || true
+done
+`
+	unit := `[Unit]
+Description=P-BOX Docker DNS transparent proxy rules
+After=network-online.target docker.service podman.service p-box.service
+Wants=network-online.target p-box.service
+
+[Service]
+Type=oneshot
+Environment=PBOX_DNS_PORT=1053
+ExecStart=/usr/local/sbin/p-box-docker-dns-proxy.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		s.addLog("Docker DNS proxy script write failed: " + err.Error())
+		return
+	}
+	if err := os.WriteFile(servicePath, []byte(unit), 0644); err != nil {
+		s.addLog("Docker DNS proxy service write failed: " + err.Error())
+		return
+	}
+	exec.Command("systemctl", "daemon-reload").Run()
+	exec.Command("systemctl", "enable", "p-box-docker-dns-proxy.service").Run()
+	exec.Command("sh", scriptPath).Start()
+	s.addLog("Docker DNS proxy rules installed")
 }
 
 // releasePort53 释放 53 端口

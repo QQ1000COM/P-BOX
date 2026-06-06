@@ -132,9 +132,6 @@ func (s *Server) setupRoutes() {
 			return settingsHandler.GetCurrentSettings()
 		})
 
-		// 检查自动启动
-		s.proxyHandler.GetService().AutoStartIfEnabled()
-
 		// 核心模块
 		coreHandler := core.NewHandler(s.config.DataDir)
 		coreHandler.RegisterRoutes(api.Group("/core"))
@@ -202,6 +199,9 @@ func (s *Server) setupRoutes() {
 				wgService.AutoStartIfEnabled()
 			}()
 		})
+
+		// 检查自动启动
+		s.proxyHandler.GetService().AutoStartIfEnabled()
 	}
 
 	// WebSocket 路由

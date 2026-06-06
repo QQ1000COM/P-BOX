@@ -131,6 +131,7 @@ type TUNConfig struct {
 	Device              string   `yaml:"device,omitempty"`
 	Stack               string   `yaml:"stack,omitempty"`
 	DNSHijack           []string `yaml:"dns-hijack,omitempty"`
+	Inet4Address        []string `yaml:"inet4-address,omitempty"`
 	AutoRoute           bool     `yaml:"auto-route"`
 	AutoRedirect        bool     `yaml:"auto-redirect,omitempty"`
 	AutoDetectInterface bool     `yaml:"auto-detect-interface"`
@@ -339,14 +340,15 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 		udpTimeout := 300
 		gso := true
 		gsoMaxSize := 65536
-		strictRoute := true
-		autoRoute := true
-		autoRedirect := true
+		strictRoute := false
+		autoRoute := false
+		autoRedirect := false
 		autoDetectInterface := true
 		endpointIndependentNat := true
 		dnsHijack := []string{"any:53", "tcp://any:53"}
+		inet4Address := []string{"198.18.0.1/16"}
 		routeExcludeAddress := []string{
-			"192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12",
+			"192.168.0.0/16", "10.0.0.0/8",
 			"127.0.0.0/8", "fc00::/7", "fe80::/10",
 		}
 
@@ -376,16 +378,21 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 			if len(tunSettings.DNSHijack) > 0 {
 				dnsHijack = tunSettings.DNSHijack
 			}
+			if len(tunSettings.Inet4Address) > 0 {
+				inet4Address = tunSettings.Inet4Address
+			}
 			if len(tunSettings.RouteExcludeAddress) > 0 {
 				routeExcludeAddress = tunSettings.RouteExcludeAddress
 			}
 		}
+		routeExcludeAddress = filterDockerSubnets(routeExcludeAddress)
 
 		config.TUN = &TUNConfig{
 			Enable:                 true,
 			Device:                 device,
 			Stack:                  stack,
 			DNSHijack:              dnsHijack,
+			Inet4Address:           inet4Address,
 			AutoRoute:              autoRoute,
 			AutoRedirect:           autoRedirect,
 			AutoDetectInterface:    autoDetectInterface,
@@ -397,9 +404,14 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 			EndpointIndependentNat: endpointIndependentNat,
 			RouteExcludeAddress:    routeExcludeAddress,
 		}
+		if config.RedirPort == 0 {
+			config.RedirPort = 7892
+		}
 		// TUN 模式下调整 DNS 配置
 		if config.DNS != nil {
-			config.DNS.Listen = "0.0.0.0:53"
+			if config.DNS.Listen == "" || config.DNS.Listen == "0.0.0.0:53" {
+				config.DNS.Listen = "0.0.0.0:1053"
+			}
 			config.DNS.EnhancedMode = "fake-ip" // fake-ip 模式响应更快
 		}
 	}
@@ -1501,7 +1513,7 @@ func GetDefaultOptions() ConfigGeneratorOptions {
 		TProxyPort:         7893,
 		EnableTUN:          false,
 		EnableDNS:          true,
-		DNSListen:          "0.0.0.0:53",
+		DNSListen:          "0.0.0.0:1053",
 		EnhancedMode:       "fake-ip",
 		ExternalController: "127.0.0.1:9090",
 	}
