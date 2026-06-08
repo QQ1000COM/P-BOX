@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Palette, Info, Check, Server, Power, Zap, Rocket, Gauge, ArrowUpDown, Loader2, Lock, Shield, ChevronRight } from 'lucide-react'
 import { useThemeStore, ThemeStyle } from '@/stores/themeStore'
 import { systemApi, SystemConfig } from '@/api/system'
@@ -14,11 +15,32 @@ export default function SettingsPage() {
   const [sysConfig, setSysConfig] = useState<SystemConfig | null>(null)
   const [sysLoading, setSysLoading] = useState(true)
   const [authEnabled, setAuthEnabled] = useState(false)
+  const [authUsername, setAuthUsername] = useState('admin')
+  const [username, setUsername] = useState('admin')
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
 
   useEffect(() => { fetchSysConfig(); fetchAuthConfig() }, [])
 
-  const fetchAuthConfig = async () => { try { const cfg = await authApi.getConfig(); setAuthEnabled(cfg.enabled) } catch {} }
-  const handleAuthToggle = async () => { try { await authApi.setEnabled(!authEnabled); setAuthEnabled(!authEnabled) } catch {} }
+  const fetchAuthConfig = async () => {
+    try {
+      const cfg = await authApi.getConfig()
+      setAuthEnabled(cfg.enabled)
+      setAuthUsername(cfg.username || 'admin')
+      setUsername(cfg.username || 'admin')
+    } catch {}
+  }
+  const handleAuthToggle = async () => {
+    try {
+      await authApi.setEnabled(!authEnabled)
+      setAuthEnabled(!authEnabled)
+      toast.success(t('common.saved'))
+    } catch (err) {
+      toast.error((err as Error).message || t('common.error'))
+    }
+  }
   const fetchSysConfig = async () => { try { setSysLoading(true); setSysConfig(await systemApi.getConfig()) } catch {} finally { setSysLoading(false) } }
 
   const handleSysToggle = async (key: keyof SystemConfig, setter: (e: boolean) => Promise<unknown>) => {
@@ -27,6 +49,48 @@ export default function SettingsPage() {
   }
 
   const handleOptimizeAll = async () => { try { await systemApi.optimizeAll(); await fetchSysConfig() } catch {} }
+
+  const handleUsernameSave = async () => {
+    const nextUsername = username.trim()
+    if (nextUsername.length < 2) {
+      toast.error(t('auth.usernameTooShort'))
+      return
+    }
+    setAuthLoading(true)
+    try {
+      await authApi.updateUsername(nextUsername)
+      setAuthUsername(nextUsername)
+      toast.success(t('common.saved'))
+    } catch (err) {
+      toast.error((err as Error).message || t('common.error'))
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handlePasswordSave = async () => {
+    if (newPassword.length < 6) {
+      toast.error('密码长度至少 6 位')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error(t('auth.passwordMismatch'))
+      return
+    }
+    setAuthLoading(true)
+    try {
+      await authApi.changePassword(oldPassword, newPassword)
+      setOldPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      localStorage.removeItem('p-box-token')
+      toast.success('密码已修改，请重新登录')
+    } catch (err) {
+      toast.error((err as Error).message || t('auth.changeFailed'))
+    } finally {
+      setAuthLoading(false)
+    }
+  }
 
   const themeStyles: { id: ThemeStyle; label: string; description: string }[] = [
     { id: 'apple-glass', label: t('settings.appleGlass'), description: t('settings.glassDescription') },
@@ -62,6 +126,56 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div><span className={cn('text-sm', themeStyle === 'apple-glass' ? 'text-slate-600' : 'text-slate-300')}>{t('settings.enableAuth')}</span><p className={cn('text-xs', themeStyle === 'apple-glass' ? 'text-slate-400' : 'text-slate-500')}>{t('settings.enableAuthDesc')}</p></div>
             <Toggle value={authEnabled} onChange={handleAuthToggle} />
+          </div>
+          <div className={cn('rounded-xl p-3 space-y-3', themeStyle === 'apple-glass' ? 'bg-black/[0.03]' : 'bg-white/5')}>
+            <div>
+              <label className={cn('block text-xs mb-1', themeStyle === 'apple-glass' ? 'text-slate-500' : 'text-slate-400')}>{t('auth.changeUsername')}</label>
+              <div className="flex gap-2">
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className={cn('flex-1 min-w-0 px-3 py-2 rounded-lg text-sm border outline-none', themeStyle === 'apple-glass' ? 'bg-white/60 border-white/60 text-slate-800' : 'bg-neutral-900 border-neutral-700 text-white')}
+                  placeholder={authUsername}
+                />
+                <button
+                  onClick={handleUsernameSave}
+                  disabled={authLoading || username.trim() === authUsername}
+                  className={cn('px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50', themeStyle === 'apple-glass' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-cyan-500 hover:bg-cyan-600')}
+                >
+                  {t('common.save')}
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input
+                type="password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                placeholder={t('auth.oldPassword')}
+                className={cn('px-3 py-2 rounded-lg text-sm border outline-none', themeStyle === 'apple-glass' ? 'bg-white/60 border-white/60 text-slate-800 placeholder:text-slate-400' : 'bg-neutral-900 border-neutral-700 text-white placeholder:text-slate-500')}
+              />
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder={t('auth.newPassword')}
+                className={cn('px-3 py-2 rounded-lg text-sm border outline-none', themeStyle === 'apple-glass' ? 'bg-white/60 border-white/60 text-slate-800 placeholder:text-slate-400' : 'bg-neutral-900 border-neutral-700 text-white placeholder:text-slate-500')}
+              />
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder={t('auth.confirmPassword')}
+                className={cn('px-3 py-2 rounded-lg text-sm border outline-none', themeStyle === 'apple-glass' ? 'bg-white/60 border-white/60 text-slate-800 placeholder:text-slate-400' : 'bg-neutral-900 border-neutral-700 text-white placeholder:text-slate-500')}
+              />
+            </div>
+            <button
+              onClick={handlePasswordSave}
+              disabled={authLoading || !oldPassword || !newPassword || !confirmPassword}
+              className={cn('w-full px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50', themeStyle === 'apple-glass' ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-600 hover:bg-blue-700')}
+            >
+              {t('auth.changePassword')}
+            </button>
           </div>
           {/* 安全与隐私政策 */}
           <button

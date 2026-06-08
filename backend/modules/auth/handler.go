@@ -23,12 +23,12 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	{
 		auth.GET("/config", h.GetConfig)
 		auth.POST("/login", h.Login)
-		auth.POST("/logout", h.Logout)
-		auth.PUT("/enabled", h.SetEnabled)
-		auth.PUT("/username", h.UpdateUsername)
-		auth.PUT("/password", h.UpdatePassword)
-		auth.PUT("/avatar", h.UpdateAvatar)
 		auth.GET("/check", h.CheckAuth)
+		auth.POST("/logout", h.AuthMiddleware(), h.Logout)
+		auth.PUT("/enabled", h.AuthMiddleware(), h.SetEnabled)
+		auth.PUT("/username", h.AuthMiddleware(), h.UpdateUsername)
+		auth.PUT("/password", h.AuthMiddleware(), h.UpdatePassword)
+		auth.PUT("/avatar", h.AuthMiddleware(), h.UpdateAvatar)
 	}
 }
 

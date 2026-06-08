@@ -46,6 +46,8 @@ Powered by Mihomo (Clash.Meta) Core | Elegant Web UI | One-Click Deployment
 
 ## 🚀 Quick Start
 
+See [INSTALL.md](./INSTALL.md) for Linux installation details, default account, password changes, and password reset.
+
 ### Linux One-Click Install (Recommended)
 
 ```bash
