@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X, Trash2 } from 'lucide-react'
 import { mihomoApi } from '@/api/mihomo'
@@ -23,13 +23,20 @@ interface Connection {
   rulePayload: string
 }
 
+const MAX_STORED_CONNECTIONS = 500
+const MAX_RENDERED_CONNECTIONS = 200
+const CONNECTION_UPDATE_INTERVAL_MS = 1500
+
 export default function ConnectionsPage() {
   const { t } = useTranslation()
   const { themeStyle } = useThemeStore()
   const [connections, setConnections] = useState<Connection[]>([])
+  const [connectionCount, setConnectionCount] = useState(0)
+  const [truncated, setTruncated] = useState(false)
   const [search, setSearch] = useState('')
   const [totalUp, setTotalUp] = useState(0)
   const [totalDown, setTotalDown] = useState(0)
+  const lastUpdateRef = useRef(0)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -38,11 +45,25 @@ export default function ConnectionsPage() {
 
     const handleData = (data: { 
       connections?: Connection[]
+      connectionCount?: number
+      truncated?: boolean
       uploadTotal?: number
       downloadTotal?: number 
     }) => {
+      const now = Date.now()
+      if (now - lastUpdateRef.current < CONNECTION_UPDATE_INTERVAL_MS) {
+        return
+      }
+      lastUpdateRef.current = now
       if (data.connections) {
-        setConnections(data.connections)
+        const topConnections = [...data.connections]
+          .sort((a, b) => (b.upload + b.download) - (a.upload + a.download))
+          .slice(0, MAX_STORED_CONNECTIONS)
+        setConnections(topConnections)
+        setConnectionCount(data.connectionCount ?? data.connections.length)
+        setTruncated(Boolean(data.truncated || data.connections.length > topConnections.length))
+      } else if (typeof data.connectionCount === 'number') {
+        setConnectionCount(data.connectionCount)
       }
       if (data.uploadTotal !== undefined) {
         setTotalUp(data.uploadTotal)
@@ -59,20 +80,20 @@ export default function ConnectionsPage() {
       const poll = async () => {
         try {
           const data = await mihomoApi.getConnections()
-          handleData(data as { connections?: Connection[], uploadTotal?: number, downloadTotal?: number })
+          handleData(data as { connections?: Connection[], connectionCount?: number, uploadTotal?: number, downloadTotal?: number })
         } catch {
           // ignore
         }
       }
       poll()
-      pollInterval = setInterval(poll, 1000)
+      pollInterval = setInterval(poll, 2500)
     }
 
     // 优先使用 WebSocket
     try {
       ws = mihomoApi.createConnectionsWs((data) => {
-        handleData(data as { connections?: Connection[], uploadTotal?: number, downloadTotal?: number })
-      })
+        handleData(data as { connections?: Connection[], connectionCount?: number, truncated?: boolean, uploadTotal?: number, downloadTotal?: number })
+      }, { limit: MAX_STORED_CONNECTIONS, interval: CONNECTION_UPDATE_INTERVAL_MS })
       ws.onerror = () => {
         if (!usePolling) startPolling()
       }
@@ -105,13 +126,15 @@ export default function ConnectionsPage() {
     }
   }
 
-  const filteredConnections = connections.filter((conn) => {
+  const filteredConnections = useMemo(() => connections.filter((conn) => {
     if (!search) return true
-    const host = conn.metadata.host.toLowerCase()
-    const rule = conn.rule.toLowerCase()
+    const host = (conn.metadata?.host || '').toLowerCase()
+    const rule = (conn.rule || '').toLowerCase()
     const searchLower = search.toLowerCase()
     return host.includes(searchLower) || rule.includes(searchLower)
-  })
+  }), [connections, search])
+
+  const visibleConnections = filteredConnections.slice(0, MAX_RENDERED_CONNECTIONS)
 
   return (
     <div className="space-y-4">
@@ -126,7 +149,7 @@ export default function ConnectionsPage() {
             <span className={cn(
               "font-medium",
               themeStyle === 'apple-glass' ? 'text-slate-800' : 'text-white'
-            )}>{connections.length}</span>
+            )}>{connectionCount || connections.length}</span>
           </div>
           <div>
             <span>{t('connections.upload')}: </span>
@@ -159,8 +182,17 @@ export default function ConnectionsPage() {
         />
       </div>
 
+      {(truncated || filteredConnections.length > visibleConnections.length) && (
+        <div className={cn(
+          "rounded-lg px-3 py-2 text-xs",
+          themeStyle === 'apple-glass' ? 'bg-white/40 text-slate-600' : 'bg-white/5 text-slate-400'
+        )}>
+          当前连接较多，页面仅展示流量最高的前 {visibleConnections.length} 条，完整连接数仍按上方统计。
+        </div>
+      )}
+
       {/* Connections table */}
-      <div className="glass-card overflow-x-auto">
+      <div className="glass-card overflow-auto max-h-[calc(100vh-260px)]">
         <table className="data-table">
           <thead>
             <tr className="bg-white/5">
@@ -175,25 +207,21 @@ export default function ConnectionsPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredConnections.map((conn) => (
+            {visibleConnections.map((conn) => (
               <tr key={conn.id} className="group">
                 <td className="text-foreground">
                   <div className="flex items-center gap-2">
-                    <img 
-                      src={`https://www.google.com/s2/favicons?domain=${conn.metadata.host}`}
-                      className="w-4 h-4 rounded opacity-60 group-hover:opacity-100"
-                      alt=""
-                    />
+                    <span className="w-2 h-2 rounded-full bg-emerald-400/70 flex-shrink-0" />
                     <span className="truncate max-w-[200px]">
-                      {conn.metadata.host}:{conn.metadata.destinationPort}
+                      {conn.metadata?.host || '-'}:{conn.metadata?.destinationPort || '-'}
                     </span>
                   </div>
                 </td>
                 <td className="text-muted-foreground uppercase text-[10px]">
-                  {conn.metadata.network}
+                  {conn.metadata?.network || '-'}
                 </td>
                 <td className="text-muted-foreground text-[10px]">
-                  {conn.metadata.type}
+                  {conn.metadata?.type || '-'}
                 </td>
                 <td className="text-muted-foreground text-[10px]">
                   {conn.chains.join(' → ')}

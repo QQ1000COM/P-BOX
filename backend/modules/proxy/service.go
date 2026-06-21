@@ -1053,6 +1053,10 @@ fi
 for i in 1 2 3 4 5 6 7 8 9 10; do
   if ip link show mihomo >/dev/null 2>&1; then
     ip route replace 198.18.0.0/16 dev mihomo 2>/dev/null || true
+    if command -v resolvectl >/dev/null 2>&1; then
+      resolvectl revert mihomo 2>/dev/null || true
+      resolvectl default-route mihomo false 2>/dev/null || true
+    fi
     break
   fi
   sleep 1
@@ -1062,6 +1066,8 @@ done
   [ -n "$iface" ] || continue
   "$IPTABLES" -C INPUT -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT || true
   "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT || true
+  "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport 7890 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport 7890 -j ACCEPT || true
+  "$IPTABLES" -C INPUT -i "$iface" -p udp --dport 7890 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport 7890 -j ACCEPT || true
   "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport 7892 -j ACCEPT || true
   "$IPTABLES" -C INPUT -i "$iface" -p udp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport 7892 -j ACCEPT || true
   "$IPTABLES" -C FORWARD -i "$iface" -o mihomo -j ACCEPT 2>/dev/null || "$IPTABLES" -I FORWARD 1 -i "$iface" -o mihomo -j ACCEPT || true
@@ -1070,9 +1076,11 @@ done
   while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null; do :; done
   while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
   while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
+  while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -d 198.18.0.1/32 -j RETURN 2>/dev/null; do :; done
   while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 2>/dev/null; do :; done
   "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
   "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
+  "$IPTABLES" -t nat -A PREROUTING -i "$iface" -d 198.18.0.1/32 -j RETURN || true
   "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 || true
 done
 `
@@ -1107,50 +1115,10 @@ WantedBy=multi-user.target
 
 // releasePort53 释放 53 端口
 func (s *Service) releasePort53() {
-	// 检查 53 端口是否被占用
-	if !s.isPortInUse(53) {
-		s.addLog("53 端口未被占用，无需处理")
-		return
-	}
-
-	s.addLog("检测到 53 端口被占用，正在释放...")
-
-	// 方法 1: 停止 systemd-resolved（最常见的占用者）
-	if s.isServiceActive("systemd-resolved") {
-		s.addLog("检测到 systemd-resolved 服务，正在停止...")
-		exec.Command("systemctl", "stop", "systemd-resolved").Run()
-		exec.Command("systemctl", "disable", "systemd-resolved").Run()
-
-		// 备份并修改 resolv.conf
-		if _, err := os.Stat("/etc/resolv.conf.bak"); os.IsNotExist(err) {
-			exec.Command("cp", "/etc/resolv.conf", "/etc/resolv.conf.bak").Run()
-		}
-		// 删除符号链接并创建新文件，指向 Mihomo 的 DNS
-		os.Remove("/etc/resolv.conf")
-		os.WriteFile("/etc/resolv.conf", []byte("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 114.114.114.114\noptions timeout:2 attempts:2 rotate single-request-reopen\n"), 0644)
-		s.addLog("已停止 systemd-resolved 并配置 DNS 指向 Mihomo")
-	}
-
-	// 方法 2: 停止 dnsmasq（另一个常见的 DNS 服务）
-	if s.isServiceActive("dnsmasq") {
-		s.addLog("检测到 dnsmasq 服务，正在停止...")
-		exec.Command("systemctl", "stop", "dnsmasq").Run()
-		s.addLog("已停止 dnsmasq")
-	}
-
-	// 方法 3: 使用 fuser 强制杀死占用 53 端口的进程
 	if s.isPortInUse(53) {
-		s.addLog("尝试使用 fuser 释放 53 端口...")
-		exec.Command("fuser", "-k", "53/udp").Run()
-		exec.Command("fuser", "-k", "53/tcp").Run()
-		time.Sleep(time.Millisecond * 500)
-	}
-
-	// 最终检查
-	if s.isPortInUse(53) {
-		s.addLog("警告：53 端口可能仍被占用，TUN 模式可能无法正常工作")
+		s.addLog("53 port is in use; P-BOX keeps host DNS unchanged and listens on 1053 instead")
 	} else {
-		s.addLog("53 端口已成功释放")
+		s.addLog("53 port is available")
 	}
 }
 
@@ -1189,15 +1157,7 @@ func (s *Service) restoreSystemAfterTUN() {
 		return
 	}
 
-	// 恢复 resolv.conf
-	if _, err := os.Stat("/etc/resolv.conf.bak"); err == nil {
-		exec.Command("cp", "/etc/resolv.conf.bak", "/etc/resolv.conf").Run()
-		s.addLog("已恢复 resolv.conf")
-	}
-
-	// 重新启动 systemd-resolved
-	exec.Command("systemctl", "start", "systemd-resolved").Run()
-	s.addLog("已重新启动 systemd-resolved")
+	s.addLog("TUN stopped; host DNS configuration was left unchanged")
 }
 
 // ============================================================================

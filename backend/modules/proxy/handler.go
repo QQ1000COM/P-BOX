@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,9 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/mihomo/proxies/:name", h.ProxyMihomoGetProxy)
 	r.PUT("/mihomo/proxies/:name", h.ProxyMihomoSelectProxy)
 	r.GET("/mihomo/proxies/:name/delay", h.ProxyMihomoTestDelay)
+	r.GET("/mihomo/connections", h.ProxyMihomoGetConnections)
+	r.DELETE("/mihomo/connections", h.ProxyMihomoCloseAllConnections)
+	r.DELETE("/mihomo/connections/:id", h.ProxyMihomoCloseConnection)
 }
 
 func (h *Handler) GetStatus(c *gin.Context) {
@@ -743,4 +747,66 @@ func (h *Handler) ResetSingBoxTemplate(c *gin.Context) {
 		"message": "success",
 		"data":    h.service.GetSingBoxTemplate(),
 	})
+}
+
+func (h *Handler) mihomoAPIAddr() string {
+	apiAddr := h.service.GetConfig().ExternalController
+	if apiAddr == "" {
+		apiAddr = "127.0.0.1:9090"
+	}
+	return apiAddr
+}
+
+func (h *Handler) ProxyMihomoGetConnections(c *gin.Context) {
+	apiAddr := h.mihomoAPIAddr()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("http://" + apiAddr + "/connections")
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":    1,
+			"message": "Mihomo API 不可用: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	c.Data(resp.StatusCode, "application/json", body)
+}
+
+func (h *Handler) ProxyMihomoCloseAllConnections(c *gin.Context) {
+	apiAddr := h.mihomoAPIAddr()
+	req, _ := http.NewRequest("DELETE", "http://"+apiAddr+"/connections", nil)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":    1,
+			"message": "Mihomo API 不可用: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	c.Data(resp.StatusCode, "application/json", body)
+}
+
+func (h *Handler) ProxyMihomoCloseConnection(c *gin.Context) {
+	apiAddr := h.mihomoAPIAddr()
+	id := url.PathEscape(c.Param("id"))
+	req, _ := http.NewRequest("DELETE", "http://"+apiAddr+"/connections/"+id, nil)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":    1,
+			"message": "Mihomo API 不可用: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	c.Data(resp.StatusCode, "application/json", body)
 }

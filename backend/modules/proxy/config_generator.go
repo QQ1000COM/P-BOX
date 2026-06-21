@@ -279,6 +279,8 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 		options.ExternalController = "127.0.0.1:9090"
 	}
 
+	geoxURL, hasLocalGeox := g.getGeoxURL()
+
 	config := &MihomoConfig{
 		// 基础配置
 		MixedPort:          options.MixedPort,
@@ -297,7 +299,7 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 		GeodataMode:        getOrDefault(options.GeodataMode, true),
 		GeodataLoader:      getOrDefaultStr(options.GeodataLoader, "standard"),
 		GeositeMatcher:     getOrDefaultStr(options.GeositeMatcher, "succinct"),
-		GeoAutoUpdate:      getOrDefault(options.GeoAutoUpdate, true),
+		GeoAutoUpdate:      getOrDefault(options.GeoAutoUpdate, true) && !hasLocalGeox,
 		GeoUpdateInterval:  getOrDefaultInt(options.GeoUpdateInterval, 24),
 		GlobalUA:           getOrDefaultStr(options.GlobalUA, "clash.meta"),
 		ETagSupport:        getOrDefault(options.ETagSupport, true),
@@ -308,7 +310,7 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 		DisableKeepAlive:  options.DisableKeepAlive,
 
 		// GEO 数据源
-		GeoxURL: g.getGeoxURL(),
+		GeoxURL: geoxURL,
 
 		// 缓存配置
 		Profile: &ProfileConfig{
@@ -1314,7 +1316,7 @@ func (g *ConfigGenerator) generateRuleProviders() map[string]RuleProvider {
 }
 
 // getGeoxURL 获取 GEO 数据文件 URL（优先使用本地文件）
-func (g *ConfigGenerator) getGeoxURL() *GeoxURL {
+func (g *ConfigGenerator) getGeoxURL() (*GeoxURL, bool) {
 	baseURL := "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release"
 
 	// 本地文件路径
@@ -1324,10 +1326,12 @@ func (g *ConfigGenerator) getGeoxURL() *GeoxURL {
 	asnPath := filepath.Join(g.dataDir, "GeoLite2-ASN.mmdb")
 
 	geox := &GeoxURL{}
+	hasLocal := false
 
 	// GeoIP
 	if _, err := os.Stat(geoipPath); err == nil {
 		geox.GeoIP = geoipPath
+		hasLocal = true
 	} else {
 		geox.GeoIP = baseURL + "/geoip.dat"
 	}
@@ -1335,6 +1339,7 @@ func (g *ConfigGenerator) getGeoxURL() *GeoxURL {
 	// GeoSite
 	if _, err := os.Stat(geositePath); err == nil {
 		geox.GeoSite = geositePath
+		hasLocal = true
 	} else {
 		geox.GeoSite = baseURL + "/geosite.dat"
 	}
@@ -1342,6 +1347,7 @@ func (g *ConfigGenerator) getGeoxURL() *GeoxURL {
 	// MMDB
 	if _, err := os.Stat(mmdbPath); err == nil {
 		geox.MMDB = mmdbPath
+		hasLocal = true
 	} else {
 		geox.MMDB = baseURL + "/country.mmdb"
 	}
@@ -1349,11 +1355,12 @@ func (g *ConfigGenerator) getGeoxURL() *GeoxURL {
 	// ASN
 	if _, err := os.Stat(asnPath); err == nil {
 		geox.ASN = asnPath
+		hasLocal = true
 	} else {
 		geox.ASN = baseURL + "/GeoLite2-ASN.mmdb"
 	}
 
-	return geox
+	return geox, hasLocal
 }
 
 // generateRules 生成规则 (使用 RULE-SET 引用远程规则)

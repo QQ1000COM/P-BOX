@@ -106,15 +106,15 @@ export const mihomoApi = {
     }
   },
 
-  // Get connections (direct access)
+  // Get connections through backend proxy. Browsers cannot reach 127.0.0.1:9090 on the server.
   async getConnections(): Promise<{ downloadTotal: number; uploadTotal: number; connections: unknown[] }> {
-    const res = await fetch(`${getDirectApiBase()}/connections`)
+    const res = await fetch(`${getProxyApiBase()}/connections`)
     return res.json()
   },
 
   // Close all connections
   async closeAllConnections(): Promise<void> {
-    await fetch(`${getDirectApiBase()}/connections`, { method: 'DELETE' })
+    await fetch(`${getProxyApiBase()}/connections`, { method: 'DELETE' })
   },
 
   // 快速控制 API
@@ -152,14 +152,22 @@ export const mihomoApi = {
 
   // Close single connection
   async closeConnection(id: string): Promise<void> {
-    await fetch(`${getDirectApiBase()}/connections/${id}`, { method: 'DELETE' })
+    await fetch(`${getProxyApiBase()}/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   // Connections real-time update WebSocket (via backend WebSocket proxy)
-  createConnectionsWs(onMessage: (data: unknown) => void): WebSocket {
+  createConnectionsWs(
+    onMessage: (data: unknown) => void,
+    options: { limit?: number; summary?: boolean; interval?: number } = {}
+  ): WebSocket {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const ws = new WebSocket(`${protocol}//${host}/ws/connections`)
+    const params = new URLSearchParams()
+    if (options.limit) params.set('limit', String(options.limit))
+    if (options.summary) params.set('summary', '1')
+    if (options.interval) params.set('interval', String(options.interval))
+    const query = params.toString()
+    const ws = new WebSocket(`${protocol}//${host}/ws/connections${query ? `?${query}` : ''}`)
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)

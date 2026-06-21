@@ -43,6 +43,9 @@ func main() {
 		cfg.Log.Level = "debug"
 	}
 
+	server.Version = Version
+	server.BuildTime = BuildTime
+
 	// 启动服务器
 	srv := server.New(cfg)
 	go func() {

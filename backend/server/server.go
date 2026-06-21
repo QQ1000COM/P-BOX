@@ -225,7 +225,7 @@ func (s *Server) healthCheck(c *gin.Context) {
 		"message": "success",
 		"data": gin.H{
 			"status":  "healthy",
-			"version": "0.1.0",
+			"version": Version,
 		},
 	})
 }

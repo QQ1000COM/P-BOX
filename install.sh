@@ -191,6 +191,10 @@ fi
 for i in 1 2 3 4 5 6 7 8 9 10; do
     if ip link show mihomo >/dev/null 2>&1; then
         ip route replace 198.18.0.0/16 dev mihomo 2>/dev/null || true
+        if command -v resolvectl >/dev/null 2>&1; then
+            resolvectl revert mihomo 2>/dev/null || true
+            resolvectl default-route mihomo false 2>/dev/null || true
+        fi
         break
     fi
     sleep 1
@@ -200,6 +204,8 @@ done
     [ -n "$iface" ] || continue
     "$IPTABLES" -C INPUT -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport "$DNS_PORT" -j ACCEPT || true
     "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport "$DNS_PORT" -j ACCEPT || true
+    "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport 7890 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport 7890 -j ACCEPT || true
+    "$IPTABLES" -C INPUT -i "$iface" -p udp --dport 7890 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport 7890 -j ACCEPT || true
     "$IPTABLES" -C INPUT -i "$iface" -p tcp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p tcp --dport 7892 -j ACCEPT || true
     "$IPTABLES" -C INPUT -i "$iface" -p udp --dport 7892 -j ACCEPT 2>/dev/null || "$IPTABLES" -I INPUT 1 -i "$iface" -p udp --dport 7892 -j ACCEPT || true
     "$IPTABLES" -C FORWARD -i "$iface" -o mihomo -j ACCEPT 2>/dev/null || "$IPTABLES" -I FORWARD 1 -i "$iface" -o mihomo -j ACCEPT || true
@@ -208,9 +214,11 @@ done
     while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null; do :; done
     while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
     while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null; do :; done
+    while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -d 198.18.0.1/32 -j RETURN 2>/dev/null; do :; done
     while "$IPTABLES" -t nat -D PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 2>/dev/null; do :; done
     "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
     "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || true
+    "$IPTABLES" -t nat -A PREROUTING -i "$iface" -d 198.18.0.1/32 -j RETURN || true
     "$IPTABLES" -t nat -A PREROUTING -i "$iface" -p tcp -d 198.18.0.0/16 -j REDIRECT --to-ports 7892 || true
 done
 EOF

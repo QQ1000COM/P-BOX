@@ -92,10 +92,13 @@ export default function DashboardPage() {
       connectionsWs = mihomoApi.createConnectionsWs((data) => {
         const typedData = data as { 
           connections?: unknown[]
+          connectionCount?: number
           downloadTotal?: number
           uploadTotal?: number 
         }
-        if (typedData.connections) {
+        if (typeof typedData.connectionCount === 'number') {
+          setConnectionCount(typedData.connectionCount)
+        } else if (typedData.connections) {
           setConnectionCount(typedData.connections.length)
         }
         // 从 connections 获取核心启动后的总流量
@@ -106,7 +109,7 @@ export default function DashboardPage() {
             totalDown: typedData.downloadTotal!
           }))
         }
-      })
+      }, { summary: true, interval: 2000 })
       
       connectionsWs.onclose = () => {
         setTimeout(connectConnectionsWs, 3000)

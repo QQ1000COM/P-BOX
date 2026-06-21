@@ -1,8 +1,12 @@
 package websocket
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -16,70 +20,67 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Hub WebSocket 连接管理中心 (代理模式)
 type Hub struct{}
 
-// NewHub 创建 Hub
 func NewHub() *Hub {
 	return &Hub{}
 }
 
-// Run 运行 Hub (保留接口兼容)
-func (h *Hub) Run() {
-	// 代理模式不需要运行循环
-}
+func (h *Hub) Run() {}
 
-// HandleTraffic 处理流量 WebSocket (代理到 Mihomo)
 func (h *Hub) HandleTraffic(c *gin.Context) {
 	h.proxyMihomoWebSocket(c, "/traffic")
 }
 
-// HandleLogs 处理日志 WebSocket (代理到 Mihomo)
 func (h *Hub) HandleLogs(c *gin.Context) {
 	h.proxyMihomoWebSocket(c, "/logs")
 }
 
-// HandleConnections 处理连接 WebSocket (代理到 Mihomo)
 func (h *Hub) HandleConnections(c *gin.Context) {
 	h.proxyMihomoWebSocket(c, "/connections")
 }
 
-// proxyMihomoWebSocket 代理 Mihomo WebSocket
-func (h *Hub) proxyMihomoWebSocket(c *gin.Context, path string) {
-	log.Printf("[WebSocket] 收到代理请求: %s", path)
+type connectionsPayload struct {
+	DownloadTotal   int64                    `json:"downloadTotal,omitempty"`
+	UploadTotal     int64                    `json:"uploadTotal,omitempty"`
+	Connections     []map[string]interface{} `json:"connections,omitempty"`
+	ConnectionCount int                      `json:"connectionCount"`
+	Truncated       bool                     `json:"truncated,omitempty"`
+	Limit           int                      `json:"limit,omitempty"`
+}
 
-	// 升级前端连接为 WebSocket
+func (h *Hub) proxyMihomoWebSocket(c *gin.Context, path string) {
+	log.Printf("[WebSocket] proxy request: %s", path)
+
 	clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[WebSocket] 升级连接失败: %v", err)
+		log.Printf("[WebSocket] upgrade failed: %v", err)
 		return
 	}
 	defer clientConn.Close()
 
-	// 连接到 Mihomo WebSocket
-	// Mihomo API 默认监听 127.0.0.1:9090
 	mihomoURL := "ws://127.0.0.1:9090" + path
-
-	// 转发所有查询参数 (token, level 等)
 	queryString := c.Request.URL.RawQuery
 	if queryString != "" {
 		mihomoURL += "?" + queryString
 	}
 
-	log.Printf("[WebSocket] 连接 Mihomo: %s", mihomoURL)
+	log.Printf("[WebSocket] dialing Mihomo: %s", mihomoURL)
 	mihomoConn, _, err := websocket.DefaultDialer.Dial(mihomoURL, nil)
 	if err != nil {
-		log.Printf("[WebSocket] 连接 Mihomo 失败: %v", err)
-		clientConn.WriteMessage(websocket.TextMessage, []byte(`{"error":"无法连接到 Mihomo: `+err.Error()+`"}`))
+		log.Printf("[WebSocket] Mihomo dial failed: %v", err)
+		_ = clientConn.WriteMessage(websocket.TextMessage, []byte(`{"error":"cannot connect to Mihomo"}`))
 		return
 	}
 	defer mihomoConn.Close()
-	log.Printf("[WebSocket] 已连接 Mihomo, 开始转发")
 
-	// 双向转发
 	done := make(chan struct{})
+	isConnections := path == "/connections"
+	connectionLimit := clampInt(queryInt(c, "limit", 300), 50, 1000)
+	connectionSummary := queryBool(c, "summary")
+	connectionInterval := time.Duration(clampInt(queryInt(c, "interval", 1500), 500, 5000)) * time.Millisecond
+	lastConnectionSend := time.Time{}
 
-	// Mihomo -> 前端
 	go func() {
 		defer close(done)
 		for {
@@ -87,13 +88,23 @@ func (h *Hub) proxyMihomoWebSocket(c *gin.Context, path string) {
 			if err != nil {
 				return
 			}
+			if isConnections {
+				now := time.Now()
+				if !lastConnectionSend.IsZero() && now.Sub(lastConnectionSend) < connectionInterval {
+					continue
+				}
+				lastConnectionSend = now
+				if filtered, ok := compactConnectionsMessage(msg, connectionLimit, connectionSummary); ok {
+					msg = filtered
+				}
+			}
+			_ = clientConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if err := clientConn.WriteMessage(msgType, msg); err != nil {
 				return
 			}
 		}
 	}()
 
-	// 前端 -> Mihomo
 	go func() {
 		for {
 			msgType, msg, err := clientConn.ReadMessage()
@@ -107,4 +118,79 @@ func (h *Hub) proxyMihomoWebSocket(c *gin.Context, path string) {
 	}()
 
 	<-done
+}
+
+func queryInt(c *gin.Context, name string, fallback int) int {
+	value := c.Query(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func queryBool(c *gin.Context, name string) bool {
+	switch c.Query(name) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func compactConnectionsMessage(msg []byte, limit int, summary bool) ([]byte, bool) {
+	var payload connectionsPayload
+	if err := json.Unmarshal(msg, &payload); err != nil {
+		return nil, false
+	}
+	total := len(payload.Connections)
+	payload.ConnectionCount = total
+	if summary {
+		payload.Connections = nil
+	} else if total > limit {
+		sort.SliceStable(payload.Connections, func(i, j int) bool {
+			return connectionBytes(payload.Connections[i]) > connectionBytes(payload.Connections[j])
+		})
+		payload.Connections = payload.Connections[:limit]
+		payload.Truncated = true
+		payload.Limit = limit
+	}
+	filtered, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	return filtered, true
+}
+
+func connectionBytes(item map[string]interface{}) float64 {
+	return numericField(item, "upload") + numericField(item, "download")
+}
+
+func numericField(item map[string]interface{}, key string) float64 {
+	switch value := item[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		number, _ := value.Float64()
+		return number
+	default:
+		return 0
+	}
 }
