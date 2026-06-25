@@ -1,5 +1,7 @@
 package proxy
 
+import "strings"
+
 // ProxyGroupTemplate 代理组模板
 type ProxyGroupTemplate struct {
 	Name        string   `json:"name" yaml:"name"`
@@ -43,6 +45,39 @@ type ConfigTemplate struct {
 	ProxyGroups   []ProxyGroupTemplate   `json:"proxyGroups"`
 	Rules         []RuleTemplate         `json:"rules"`
 	RuleProviders []RuleProviderTemplate `json:"ruleProviders"`
+}
+
+func normalizeProxyReference(name string) string {
+	trimmed := strings.TrimSpace(name)
+	switch strings.ToLower(trimmed) {
+	case "direct":
+		return "DIRECT"
+	case "reject", "block":
+		return "REJECT"
+	}
+
+	switch trimmed {
+	case "直连", "直接连接":
+		return "DIRECT"
+	case "拒绝", "阻止", "拦截":
+		return "REJECT"
+	default:
+		return trimmed
+	}
+}
+
+func normalizeProxyReferences(proxies []string) []string {
+	normalized := make([]string, 0, len(proxies))
+	seen := make(map[string]bool, len(proxies))
+	for _, proxy := range proxies {
+		name := normalizeProxyReference(proxy)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		normalized = append(normalized, name)
+	}
+	return normalized
 }
 
 // GetDefaultProxyGroups 获取默认代理组

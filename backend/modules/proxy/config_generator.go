@@ -292,17 +292,16 @@ func (g *ConfigGenerator) GenerateConfig(nodes []ProxyNode, options ConfigGenera
 		Secret:             options.Secret,
 
 		// 高级配置 (从代理设置读取)
-		UnifiedDelay:       getOrDefault(options.UnifiedDelay, true),
-		TCPConcurrent:      getOrDefault(options.TCPConcurrent, true),
-		FindProcessMode:    getOrDefaultStr(options.FindProcessMode, "off"),
-		GlobalClientFinger: getOrDefaultStr(options.GlobalClientFingerprint, "chrome"),
-		GeodataMode:        getOrDefault(options.GeodataMode, true),
-		GeodataLoader:      getOrDefaultStr(options.GeodataLoader, "standard"),
-		GeositeMatcher:     getOrDefaultStr(options.GeositeMatcher, "succinct"),
-		GeoAutoUpdate:      getOrDefault(options.GeoAutoUpdate, true) && !hasLocalGeox,
-		GeoUpdateInterval:  getOrDefaultInt(options.GeoUpdateInterval, 24),
-		GlobalUA:           getOrDefaultStr(options.GlobalUA, "clash.meta"),
-		ETagSupport:        getOrDefault(options.ETagSupport, true),
+		UnifiedDelay:      getOrDefault(options.UnifiedDelay, true),
+		TCPConcurrent:     getOrDefault(options.TCPConcurrent, true),
+		FindProcessMode:   getOrDefaultStr(options.FindProcessMode, "off"),
+		GeodataMode:       getOrDefault(options.GeodataMode, true),
+		GeodataLoader:     getOrDefaultStr(options.GeodataLoader, "standard"),
+		GeositeMatcher:    getOrDefaultStr(options.GeositeMatcher, "succinct"),
+		GeoAutoUpdate:     getOrDefault(options.GeoAutoUpdate, true) && !hasLocalGeox,
+		GeoUpdateInterval: getOrDefaultInt(options.GeoUpdateInterval, 24),
+		GlobalUA:          getOrDefaultStr(options.GlobalUA, "clash.meta"),
+		ETagSupport:       getOrDefault(options.ETagSupport, true),
 
 		// TCP Keep-Alive (从代理设置读取)
 		KeepAliveInterval: getOrDefaultInt(options.KeepAliveInterval, 15),
@@ -1580,6 +1579,10 @@ func (g *ConfigGenerator) generateProxyGroupsFromTemplate(nodes []ProxyNode, tem
 		}
 
 		// 确保有代理
+		if len(group.Proxies) == 0 {
+			group.Proxies = []string{"DIRECT"}
+		}
+		group.Proxies = normalizeProxyReferences(group.Proxies)
 		if len(group.Proxies) == 0 {
 			group.Proxies = []string{"DIRECT"}
 		}

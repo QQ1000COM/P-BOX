@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,11 +18,10 @@ var (
 )
 
 func main() {
-	// 命令行参数
-	port := flag.Int("port", 8383, "API 服务端口")
-	configPath := flag.String("config", "config.yaml", "配置文件路径")
-	debug := flag.Bool("debug", false, "调试模式")
-	showVersion := flag.Bool("version", false, "显示版本信息")
+	port := flag.Int("port", 8383, "API service port")
+	configPath := flag.String("config", "config.yaml", "config file path")
+	debug := flag.Bool("debug", false, "enable debug mode")
+	showVersion := flag.Bool("version", false, "show version information")
 	flag.Parse()
 
 	if *showVersion {
@@ -29,10 +29,9 @@ func main() {
 		return
 	}
 
-	// 加载配置
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Printf("加载配置失败: %v\n", err)
+		fmt.Printf("failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -46,25 +45,26 @@ func main() {
 	server.Version = Version
 	server.BuildTime = BuildTime
 
-	// 启动服务器
 	srv := server.New(cfg)
 	go func() {
 		if err := srv.Start(); err != nil {
-			fmt.Printf("服务器启动失败: %v\n", err)
+			if err == http.ErrServerClosed {
+				return
+			}
+			fmt.Printf("server startup failed: %v\n", err)
 			os.Exit(1)
 		}
 	}()
 
-	fmt.Printf("P-BOX v%s 已启动\n", Version)
-	fmt.Printf("API 地址: http://localhost:%d\n", cfg.Server.Port)
-	fmt.Printf("Web 界面: http://localhost:%d\n", cfg.Server.Port)
+	fmt.Printf("P-BOX v%s started\n", Version)
+	fmt.Printf("API address: http://localhost:%d\n", cfg.Server.Port)
+	fmt.Printf("Web panel: http://localhost:%d\n", cfg.Server.Port)
 
-	// 优雅退出
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	fmt.Println("\n正在关闭服务...")
+	fmt.Println("\nShutting down service...")
 	srv.Shutdown()
-	fmt.Println("服务已关闭")
+	fmt.Println("Service stopped")
 }

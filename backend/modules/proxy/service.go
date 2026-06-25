@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,6 +74,7 @@ type Service struct {
 	singboxGenerator *SingboxGenerator
 	configTemplate   *ConfigTemplate
 	process          *exec.Cmd
+	processDone      chan error
 	running          bool
 	startTime        time.Time
 	configPath       string
@@ -318,6 +321,12 @@ func (s *Service) Start() error {
 	}
 
 	// 启动日志收集
+	cmd := s.process
+	pid := cmd.Process.Pid
+	done := make(chan error, 1)
+	s.processDone = done
+	s.writeCorePIDFile(pid, corePath)
+
 	go s.collectLogs(stdout)
 	go s.collectLogs(stderr)
 
@@ -326,13 +335,20 @@ func (s *Service) Start() error {
 	s.configPath = configPath
 
 	// 监控进程
-	go func() {
-		s.process.Wait()
+	go func(cmd *exec.Cmd, done chan error, pid int) {
+		err := cmd.Wait()
+		done <- err
+		close(done)
+
 		s.mu.Lock()
-		s.running = false
-		s.process = nil
+		if s.process == cmd {
+			s.running = false
+			s.process = nil
+			s.processDone = nil
+			s.removeCorePIDFile(pid)
+		}
 		s.mu.Unlock()
-	}()
+	}(cmd, done, pid)
 
 	// 根据透明代理模式自动设置系统代理（macOS/Windows）
 	if s.config.TransparentMode == "off" {
@@ -356,14 +372,99 @@ func (s *Service) Start() error {
 }
 
 func (s *Service) killStaleCoreProcesses(corePath string) {
-	if runtime.GOOS != "linux" || corePath == "" {
+	if corePath == "" {
 		return
 	}
+
+	if pid, ok := s.readCorePIDFile(); ok {
+		s.killPIDIfCore(pid, corePath)
+		_ = os.Remove(s.corePIDPath())
+	}
+
+	if runtime.GOOS != "linux" {
+		return
+	}
+
 	coreDir := filepath.Dir(corePath)
 	script := fmt.Sprintf(`for pid in $(ps -eo pid=,args= | awk '$0 ~ /^ *[0-9]+ %s\/(mihomo|sing-box)/ {print $1}'); do
   [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
 done`, regexp.QuoteMeta(coreDir))
 	exec.Command("sh", "-c", script).Run()
+}
+
+func (s *Service) corePIDPath() string {
+	return filepath.Join(s.dataDir, "runtime", "core.pid")
+}
+
+func (s *Service) writeCorePIDFile(pid int, corePath string) {
+	if pid <= 0 {
+		return
+	}
+	runtimeDir := filepath.Join(s.dataDir, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		s.addLog("failed to create runtime directory: " + err.Error())
+		return
+	}
+	content := fmt.Sprintf("%d\n%s\n", pid, corePath)
+	if err := os.WriteFile(s.corePIDPath(), []byte(content), 0644); err != nil {
+		s.addLog("failed to write core pid file: " + err.Error())
+	}
+}
+
+func (s *Service) readCorePIDFile() (int, bool) {
+	data, err := os.ReadFile(s.corePIDPath())
+	if err != nil {
+		return 0, false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(fields[0])
+	return pid, err == nil && pid > 1
+}
+
+func (s *Service) removeCorePIDFile(pid int) {
+	currentPID, ok := s.readCorePIDFile()
+	if ok && currentPID != pid {
+		return
+	}
+	_ = os.Remove(s.corePIDPath())
+}
+
+func (s *Service) killPIDIfCore(pid int, corePath string) {
+	if pid <= 1 {
+		return
+	}
+	if runtime.GOOS != "linux" || !s.pidMatchesCore(pid, corePath) {
+		return
+	}
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
+	}
+}
+
+func (s *Service) pidMatchesCore(pid int, corePath string) bool {
+	if corePath == "" {
+		return false
+	}
+
+	expected := cleanDeletedProcPath(corePath)
+	if exePath, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+		if cleanDeletedProcPath(exePath) == expected {
+			return true
+		}
+	}
+
+	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ReplaceAll(string(cmdline), "\x00", " "), expected)
+}
+
+func cleanDeletedProcPath(path string) string {
+	return filepath.Clean(strings.TrimSuffix(path, " (deleted)"))
 }
 
 // configureAllBrowsers 配置所有浏览器使用系统代理
@@ -386,17 +487,46 @@ func (s *Service) Stop() error {
 	}
 
 	wasTunEnabled := s.config.TunEnabled || s.config.TransparentMode == "tun"
+	cmd := s.process
+	done := s.processDone
+	pid := 0
+	if cmd != nil && cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	s.mu.Unlock()
 
-	if s.process != nil && s.process.Process != nil {
-		if err := s.process.Process.Kill(); err != nil {
-			s.mu.Unlock()
-			return fmt.Errorf("failed to stop core: %w", err)
+	waited := false
+	if cmd != nil && cmd.Process != nil {
+		if err := cmd.Process.Kill(); err != nil {
+			if done == nil {
+				return fmt.Errorf("failed to stop core: %w", err)
+			}
+			select {
+			case <-done:
+				waited = true
+			case <-time.After(2 * time.Second):
+				return fmt.Errorf("failed to stop core: %w", err)
+			}
 		}
-		s.process.Wait()
+
+		if done != nil && !waited {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				return fmt.Errorf("timeout waiting for core to stop")
+			}
+		}
 	}
 
-	s.running = false
-	s.process = nil
+	s.mu.Lock()
+	if s.process == cmd {
+		s.running = false
+		s.process = nil
+		s.processDone = nil
+		if pid > 0 {
+			s.removeCorePIDFile(pid)
+		}
+	}
 	s.mu.Unlock()
 
 	// 恢复系统环境（在锁外执行）
@@ -867,12 +997,29 @@ func (s *Service) fixLegacyProxyNames() {
 				changed = true
 			}
 		}
+		normalized := normalizeProxyReferences(group.Proxies)
+		if !sameStringSlice(group.Proxies, normalized) {
+			group.Proxies = normalized
+			changed = true
+		}
 	}
 
 	if changed {
 		fmt.Println("✓ 自动修复旧的代理组名称引用")
 		s.saveConfigTemplate()
 	}
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // mergeDefaultProxyGroups 合并默认代理组（自动添加新的代理组，不覆盖已有的）
