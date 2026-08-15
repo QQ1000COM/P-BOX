@@ -611,11 +611,8 @@ func GetSingBoxProxyGroups() []SBOutbound {
 		// 1. 自动选择
 		{
 			Tag:       "自动选择",
-			Type:      "urltest",
+			Type:      "selector",
 			Outbounds: []string{}, // 动态填充所有节点
-			URL:       "https://www.gstatic.com/generate_204",
-			Interval:  "5m",
-			Tolerance: 50,
 		},
 		// 2. 故障转移 (不引用 手动节点 避免循环依赖)
 		{

@@ -65,15 +65,12 @@ export const defaultSingBoxProxyGroups: SingBoxProxyGroup[] = [
   // 1. 自动选择
   {
     tag: 'auto',
-    type: 'urltest',
+    type: 'selector',
     name: '自动选择',
-    description: '自动选择延迟最低的节点',
+    description: '手动选择节点（切换后保持固定，不会自动跳转）',
     icon: '⚡',
     enabled: true,
-    outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
+    outbounds: []
   },
   // 2. 故障转移
   {
@@ -232,63 +229,48 @@ export const defaultSingBoxProxyGroups: SingBoxProxyGroup[] = [
   // === 地区节点分组 ===
   {
     tag: 'HongKong',
-    type: 'urltest',
+    type: 'selector',
     name: '香港节点',
-    description: '香港节点自动选择',
-    icon: '��',
+    description: '香港节点手动选择',
+    icon: '🇭🇰',
     enabled: true,
     outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
   },
   {
     tag: 'Taiwan',
-    type: 'urltest',
+    type: 'selector',
     name: '台湾节点',
-    description: '台湾节点自动选择',
+    description: '台湾节点手动选择',
     icon: '🇹🇼',
     enabled: true,
     outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
   },
   {
     tag: 'Japan',
-    type: 'urltest',
+    type: 'selector',
     name: '日本节点',
-    description: '日本节点自动选择',
+    description: '日本节点手动选择',
     icon: '🇯🇵',
     enabled: true,
     outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
   },
   {
     tag: 'Singapore',
-    type: 'urltest',
+    type: 'selector',
     name: '新加坡节点',
-    description: '新加坡节点自动选择',
-    icon: '�🇬',
+    description: '新加坡节点手动选择',
+    icon: '🇸🇬',
     enabled: true,
     outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
   },
   {
     tag: 'America',
-    type: 'urltest',
+    type: 'selector',
     name: '美国节点',
-    description: '美国节点自动选择',
+    description: '美国节点手动选择',
     icon: '🇺🇸',
     enabled: true,
     outbounds: [],
-    url: 'https://www.gstatic.com/generate_204',
-    interval: '5m',
-    tolerance: 50
   },
   {
     tag: 'Manual',

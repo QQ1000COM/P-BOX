@@ -242,12 +242,9 @@ func (g *SingboxGenerator) generateOutbounds(nodes []ProxyNode, options ConfigGe
 		})
 
 		outbounds = append(outbounds, SingboxOutbound{
-			Type:           "urltest",
-			Tag:            "auto",
-			Outbounds:      nodeNames,
-			URL:            "https://www.gstatic.com/generate_204",
-			Interval:       "300s",
-			InterruptExist: true,
+			Type:      "selector",
+			Tag:       "auto",
+			Outbounds: nodeNames,
 		})
 	}
 

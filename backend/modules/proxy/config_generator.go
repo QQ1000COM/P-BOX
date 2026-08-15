@@ -1135,11 +1135,9 @@ func (g *ConfigGenerator) generateProxyGroups(nodes []ProxyNode) []ProxyGroup {
 			Proxies: append(append([]string{"♻️ 自动选择", "🔯 故障转移"}, regionGroupNames...), "DIRECT"),
 		},
 		{
-			Name:     "♻️ 自动选择",
-			Type:     "url-test",
-			Proxies:  nodeNames,
-			URL:      "http://www.gstatic.com/generate_204",
-			Interval: 300,
+			Name:    "♻️ 自动选择",
+			Type:    "select",
+			Proxies: nodeNames,
 		},
 		{
 			Name:     "🔯 故障转移",
@@ -1232,11 +1230,9 @@ func (g *ConfigGenerator) generateProxyGroups(nodes []ProxyNode) []ProxyGroup {
 	for _, regionName := range regionNames {
 		if matched, ok := regionNodes[regionName]; ok && len(matched) > 0 {
 			groups = append(groups, ProxyGroup{
-				Name:     regionName,
-				Type:     "url-test",
-				Proxies:  matched,
-				URL:      "http://www.gstatic.com/generate_204",
-				Interval: 300,
+				Name:    regionName,
+				Type:    "select",
+				Proxies: matched,
 			})
 		}
 	}
